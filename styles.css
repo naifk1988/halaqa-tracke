@@ -168,3 +168,45 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
   opacity: 0; pointer-events: none; transition: opacity .2s;
 }
 #toast.show { opacity: .92; }
+
+/* ============ المصحف ============ */
+@font-face {
+  font-family: "Amiri Quran";
+  src: url("fonts/amiri-quran.woff2") format("woff2");
+  font-display: swap;
+}
+.mushaf-nav { margin: 10px 0; }
+.mushaf-nav input { width: 70px; min-height: 32px; padding: 2px 6px; text-align: center; display: inline-block; }
+.mushaf-page {
+  font-family: "Amiri Quran", "KFGQPC Uthmanic Script HAFS", "Noto Naskh Arabic", serif;
+  font-size: 1.6rem; line-height: 2.5; text-align: justify;
+  background: #fffdf5; color: #1a1a1a;
+  border: 1px solid #e6dcc0; border-radius: var(--radius);
+  padding: 14px 16px; box-shadow: inset 0 0 0 4px #f7efd9;
+}
+@media (prefers-color-scheme: dark) {
+  .mushaf-page { background: #1d1b16; color: #f3ecd9; border-color: #3a3426; box-shadow: inset 0 0 0 4px #25221b; }
+}
+.mushaf-page .w { cursor: pointer; border-radius: 6px; padding: 0 1px; transition: background .15s; }
+.mushaf-page .w:hover { background: var(--primary-soft); }
+.mushaf-page.no-student .w { cursor: default; }
+.mushaf-page.no-student .w:hover { background: none; }
+.ayah-no { color: var(--primary); cursor: pointer; font-size: .9em; white-space: nowrap; border-radius: 6px; }
+.ayah.in-range { background: rgba(15, 118, 110, .08); border-radius: 6px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.surah-head {
+  text-align: center; font-size: 1.15rem; margin: 10px 0 2px;
+  border: 1px solid #d8c690; border-radius: 10px; background: rgba(216, 198, 144, .18);
+}
+.basmala { text-align: center; }
+.w.m-once { background: var(--warn-soft); color: var(--warn); text-decoration: underline wavy; text-underline-offset: 6px; }
+.w.m-rep, .ayah-no.m-rep { background: var(--danger-soft); color: var(--danger); text-decoration: underline wavy; text-underline-offset: 6px; font-weight: 700; }
+.ayah-no.m-once { background: var(--warn-soft); }
+.w.m-ok, .ayah-no.m-ok { background: var(--ok-soft); color: var(--ok); }
+.legend { margin-top: 10px; line-height: 2.2; }
+.legend .w { padding: 0 6px; border-radius: 6px; }
+.dlg-word {
+  font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 2rem; line-height: 2.2;
+  text-align: center; background: var(--bg); border-radius: 10px; padding: 6px 10px;
+}
+.kind-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kind-grid .btn { min-height: 48px; }

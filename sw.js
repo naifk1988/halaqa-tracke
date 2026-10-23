@@ -1,6 +1,6 @@
 // يتيح عمل التطبيق دون اتصال بالإنترنت بعد أول فتح
-const CACHE = "halaqa-v1";
-const FILES = ["./", "index.html", "styles.css", "app.js", "data.js", "manifest.json", "icon.svg"];
+const CACHE = "halaqa-v2";
+const FILES = ["./", "index.html", "styles.css", "app.js", "data.js", "manifest.json", "icon.svg", "quran-data.js", "fonts/amiri-quran.woff2"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
