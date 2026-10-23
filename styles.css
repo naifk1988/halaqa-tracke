@@ -13,9 +13,24 @@
   --ok: #15803d;
   --ok-soft: #dcfce7;
   --radius: 14px;
+  --topbar: #0f766e;
+  --on-primary: #ffffff;
+  --paper: #fffdf5;
+  --paper-fg: #1a1a1a;
+  --paper-line: #e6dcc0;
+  --paper-inset: #f7efd9;
+  --frame: #d8c690;
+  --frame-soft: rgba(216, 198, 144, .18);
+  --range: rgba(15, 118, 110, .08);
+  --toast-bg: #111111;
+  --toast-fg: #ffffff;
+  --backdrop: rgba(0, 0, 0, .45);
+  --wa: #25d366;
+  --wa-fg: #063d1f;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #111614;
     --card: #1b2220;
     --text: #e7ece9;
@@ -29,7 +44,52 @@
     --warn-soft: #3a2c0c;
     --ok: #4ade80;
     --ok-soft: #12301d;
+    --topbar: #0b3d38;
+    --on-primary: #062420;
+    --paper: #1d1b16;
+    --paper-fg: #f3ecd9;
+    --paper-line: #3a3426;
+    --paper-inset: #25221b;
+    --frame: #6b5d33;
+    --frame-soft: rgba(216, 198, 144, .10);
+    --range: rgba(45, 212, 191, .10);
+    --toast-bg: #e7ece9;
+    --toast-fg: #111614;
+    --backdrop: rgba(0, 0, 0, .6);
+    --wa: #25d366;
+    --wa-fg: #063d1f;
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+    --bg: #111614;
+    --card: #1b2220;
+    --text: #e7ece9;
+    --muted: #9aa5a0;
+    --line: #2c3633;
+    --primary: #2dd4bf;
+    --primary-soft: #123a35;
+    --danger: #f87171;
+    --danger-soft: #3b1717;
+    --warn: #fbbf24;
+    --warn-soft: #3a2c0c;
+    --ok: #4ade80;
+    --ok-soft: #12301d;
+    --topbar: #0b3d38;
+    --on-primary: #062420;
+    --paper: #1d1b16;
+    --paper-fg: #f3ecd9;
+    --paper-line: #3a3426;
+    --paper-inset: #25221b;
+    --frame: #6b5d33;
+    --frame-soft: rgba(216, 198, 144, .10);
+    --range: rgba(45, 212, 191, .10);
+    --toast-bg: #e7ece9;
+    --toast-fg: #111614;
+    --backdrop: rgba(0, 0, 0, .6);
+    --wa: #25d366;
+    --wa-fg: #063d1f;
+    color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -45,13 +105,12 @@ a { color: var(--primary); text-decoration: none; }
 
 .topbar {
   position: sticky; top: 0; z-index: 5;
-  background: var(--primary); color: #fff;
+  background: var(--topbar); color: #fff;
   padding: 10px 16px;
 }
-@media (prefers-color-scheme: dark) { .topbar { background: #0b3d38; } }
 .brand { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 700; font-size: 1.1rem; }
 
-.container { max-width: 760px; margin: 0 auto; padding: 16px; }
+.container { max-width: 760px; margin: 0 auto; padding-block: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 
 .tabbar {
   position: fixed; bottom: 0; inset-inline: 0; z-index: 5;
@@ -91,10 +150,12 @@ h3 { font-size: 1rem; margin: 0 0 6px; }
   border-radius: 10px; padding: 8px 14px; font: inherit; font-size: .95rem; cursor: pointer; white-space: nowrap;
   min-height: 40px;
 }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-@media (prefers-color-scheme: dark) { .btn.primary { color: #062420; } }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: var(--card); }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
-.btn.whatsapp { background: #25d366; border-color: #25d366; color: #063; font-weight: 700; }
+.btn.whatsapp { background: var(--wa); border-color: var(--wa); color: var(--wa-fg); font-weight: 700; }
+a.btn { text-decoration: none; }
+.btn:focus-visible, .tabs button:focus-visible, .tabbar a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .btn.sm { padding: 4px 10px; min-height: 32px; font-size: .85rem; }
 .btn.block { width: 100%; }
 
@@ -122,8 +183,7 @@ h3 { font-size: 1rem; margin: 0 0 6px; }
   border: 1px solid var(--line); background: var(--card); color: var(--text);
   border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer; white-space: nowrap;
 }
-.tabs button.active { background: var(--primary); border-color: var(--primary); color: #fff; }
-@media (prefers-color-scheme: dark) { .tabs button.active { color: #062420; } }
+.tabs button.active { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 
 .mistake.repeated { border-inline-start: 4px solid var(--danger); }
 .mistake.resolved { opacity: .6; }
@@ -149,7 +209,7 @@ dialog {
   border: 0; border-radius: var(--radius); padding: 0;
   background: var(--card); color: var(--text);
 }
-dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog::backdrop { background: var(--backdrop); }
 #dlg-form { padding: 16px; }
 .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; position: sticky; bottom: 0; background: var(--card); padding-top: 8px; }
 
@@ -164,7 +224,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 
 #toast {
   position: fixed; bottom: calc(84px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
-  background: #111; color: #fff; padding: 8px 16px; border-radius: 999px; font-size: .9rem;
+  background: var(--toast-bg); color: var(--toast-fg); padding: 8px 16px; border-radius: 999px; font-size: .9rem;
   opacity: 0; pointer-events: none; transition: opacity .2s;
 }
 #toast.show { opacity: .92; }
@@ -180,22 +240,19 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .mushaf-page {
   font-family: "Amiri Quran", "KFGQPC Uthmanic Script HAFS", "Noto Naskh Arabic", serif;
   font-size: 1.6rem; line-height: 2.5; text-align: justify;
-  background: #fffdf5; color: #1a1a1a;
-  border: 1px solid #e6dcc0; border-radius: var(--radius);
-  padding: 14px 16px; box-shadow: inset 0 0 0 4px #f7efd9;
-}
-@media (prefers-color-scheme: dark) {
-  .mushaf-page { background: #1d1b16; color: #f3ecd9; border-color: #3a3426; box-shadow: inset 0 0 0 4px #25221b; }
+  background: var(--paper); color: var(--paper-fg);
+  border: 1px solid var(--paper-line); border-radius: var(--radius);
+  padding: 14px 16px; box-shadow: inset 0 0 0 4px var(--paper-inset);
 }
 .mushaf-page .w { cursor: pointer; border-radius: 6px; padding: 0 1px; transition: background .15s; }
 .mushaf-page .w:hover { background: var(--primary-soft); }
 .mushaf-page.no-student .w { cursor: default; }
 .mushaf-page.no-student .w:hover { background: none; }
 .ayah-no { color: var(--primary); cursor: pointer; font-size: .9em; white-space: nowrap; border-radius: 6px; }
-.ayah.in-range { background: rgba(15, 118, 110, .08); border-radius: 6px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.ayah.in-range { background: var(--range); border-radius: 6px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .surah-head {
   text-align: center; font-size: 1.15rem; margin: 10px 0 2px;
-  border: 1px solid #d8c690; border-radius: 10px; background: rgba(216, 198, 144, .18);
+  border: 1px solid var(--frame); border-radius: 10px; background: var(--frame-soft);
 }
 .basmala { text-align: center; }
 .w.m-once { background: var(--warn-soft); color: var(--warn); text-decoration: underline wavy; text-underline-offset: 6px; }
@@ -213,3 +270,5 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 
 .note-text { white-space: pre-wrap; margin-top: 4px; }
 .warn-note { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

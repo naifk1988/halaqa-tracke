@@ -434,7 +434,7 @@ function messageDialog(st, { title, toggles = [], build, onSent }) {
     <label><span>نص الرسالة (يمكنك تعديله)</span><textarea name="text" rows="12" style="min-height:260px"></textarea></label>
     ${hasPhone ? "" : `<p class="badge warn">لا يوجد رقم جوال لهذا الطالب — أضفه من البيانات، أو انسخ الرسالة</p>`}
     <div class="row">
-      ${hasPhone ? `<button type="button" class="btn whatsapp" data-send="wa">واتساب</button><button type="button" class="btn" data-send="sms">رسالة SMS</button>` : ""}
+      ${hasPhone ? `<a class="btn whatsapp" data-send="wa" target="_blank" rel="noopener" href="#">واتساب</a><a class="btn" data-send="sms" href="#">رسالة SMS</a>` : ""}
       <button type="button" class="btn" data-send="copy">نسخ</button>
       <span class="grow"></span>
       <button type="button" class="btn" data-close>إغلاق</button>
@@ -444,22 +444,92 @@ function messageDialog(st, { title, toggles = [], build, onSent }) {
     for (const t of toggles) opts[t.name] = $(`[name=${t.name}]`, form).checked;
     $("[name=text]", form).value = build(opts);
   };
-  toggles.forEach((t) => $(`[name=${t.name}]`, form).addEventListener("change", refresh));
-  refresh();
-  form.onclick = async (e) => {
-    const mode = e.target.dataset && e.target.dataset.send;
-    if (!mode) return;
+  // روابط الإرسال تتحدث مع كل تعديل في النص أو المستلم
+  const updateLinks = () => {
     const text = $("[name=text]", form).value;
+    const phone = st[$("[name=to]", form).value] || st.phone || st.guardianPhone;
+    const wa = $("[data-send=wa]", form), sms = $("[data-send=sms]", form);
+    if (wa) wa.href = waLink(phone, text);
+    if (sms) sms.href = smsLink(phone, text);
+  };
+  toggles.forEach((t) => $(`[name=${t.name}]`, form).addEventListener("change", () => { refresh(); updateLinks(); }));
+  $("[name=text]", form).addEventListener("input", updateLinks);
+  $("[name=to]", form).addEventListener("change", updateLinks);
+  refresh();
+  updateLinks();
+  form.onclick = async (e) => {
+    const mode = e.target.closest("[data-send]")?.dataset.send;
+    if (!mode) return;
     if (mode === "copy") {
+      const text = $("[name=text]", form).value;
       try { await navigator.clipboard.writeText(text); toast("تم نسخ الرسالة"); }
       catch { $("[name=text]", form).select(); document.execCommand("copy"); toast("تم النسخ"); }
       return;
     }
-    const phone = st[$("[name=to]", form).value] || st.phone || st.guardianPhone;
+    // الرابط نفسه يفتح واتساب أو الرسائل؛ هنا نسجّل الإرسال فقط
     if (onSent) { onSent(); save(); }
-    window.open(mode === "wa" ? waLink(phone, text) : smsLink(phone, text), "_blank");
-    dlg.close(); render();
+    setTimeout(() => { dlg.close(); render(); }, 300);
   };
+}
+
+// تأكيد داخل التطبيق (نوافذ confirm في المتصفح لا تعمل في كل البيئات)
+function confirmDialog(message, onYes, yesLabel = "حذف") {
+  openDialog(`
+    <h2>${esc(message)}</h2>
+    <div class="dlg-actions"><button type="button" class="btn" data-close>إلغاء</button><button class="btn danger solid">${yesLabel}</button></div>`,
+  () => { onYes(); });
+}
+
+function backupDialog() {
+  const json = JSON.stringify(db);
+  let href = "";
+  try { href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: "application/json" })); } catch {}
+  const form = openDialog(`
+    <h2>نسخة احتياطية</h2>
+    <p class="small muted">انسخ النص واحفظه في مكان آمن (رسالة لنفسك في واتساب أو ملاحظة)، أو نزّله ملفاً. تستعيده لاحقاً من «استعادة».</p>
+    <textarea name="backup" readonly style="min-height:120px;font-family:monospace;font-size:.75rem" dir="ltr">${esc(json)}</textarea>
+    <div class="row" style="margin-top:10px">
+      <button type="button" class="btn primary" data-copy>نسخ النص</button>
+      ${href ? `<a class="btn" href="${href}" download="halaqa-backup-${todayStr()}.json">تنزيل ملف</a>` : ""}
+      <span class="grow"></span>
+      <button type="button" class="btn" data-close>إغلاق</button>
+    </div>`, () => false, async (e) => {
+    if (!e.target.closest("[data-copy]")) return;
+    try { await navigator.clipboard.writeText(json); toast("تم نسخ النسخة الاحتياطية"); }
+    catch { $("[name=backup]", form).select(); document.execCommand("copy"); toast("تم النسخ"); }
+  });
+}
+
+function restoreData(text) {
+  let data;
+  try { data = JSON.parse(text); if (!Array.isArray(data.students)) throw 0; }
+  catch { toast("النص أو الملف ليس نسخة احتياطية صالحة"); return; }
+  confirmDialog(`استبدال البيانات الحالية بالنسخة المستعادة (${data.students.length} طالب)؟`, () => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch {}
+    const base = emptyDb();
+    db = { ...base, ...data, settings: { ...base.settings, ...(data.settings || {}) } };
+    save(); render(); toast("تمت الاستعادة");
+  }, "استعادة");
+}
+
+function restoreDialog() {
+  const form = openDialog(`
+    <h2>استعادة نسخة احتياطية</h2>
+    <label><span>اختر ملف النسخة</span><input type="file" id="restore-file" accept="application/json,.json"></label>
+    <label><span>أو الصق نص النسخة هنا</span><textarea name="paste" dir="ltr" style="font-family:monospace;font-size:.75rem"></textarea></label>
+    <div class="dlg-actions"><button type="button" class="btn" data-close>إلغاء</button><button class="btn primary">استعادة</button></div>`,
+  (fd) => {
+    const text = fd.get("paste").trim();
+    if (!text) { toast("الصق النص أو اختر ملفاً"); return false; }
+    setTimeout(() => restoreData(text));
+  });
+  $("#restore-file", form).addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { dlg.close(); restoreData(reader.result); };
+    reader.readAsText(f);
+  });
 }
 
 function reminderDialog(st) {
@@ -755,8 +825,8 @@ function pageSettings() {
     <div class="card">
       <p class="small muted">البيانات محفوظة في هذا الجهاز فقط. صدّر نسخة احتياطية بانتظام، ويمكنك استيرادها في جهاز آخر.</p>
       <div class="row">
-        <button class="btn" data-action="export">⬇️ تصدير نسخة احتياطية</button>
-        <label class="btn" style="margin:0">⬆️ استيراد<input type="file" id="import-file" accept="application/json,.json" hidden></label>
+        <button class="btn" data-action="export">⬇️ نسخة احتياطية</button>
+        <button class="btn" data-action="import">⬆️ استعادة</button>
       </div>
     </div>`;
 }
@@ -963,19 +1033,21 @@ view.addEventListener("click", (e) => {
   if (d.sendNote) return noteSendDialog(d.sendNote);
   if (d.editNote) return noteForm(r.id, db.notes.find((n) => n.id === d.editNote));
   if (d.delNote) {
-    if (!confirm("حذف هذه الملاحظة؟")) return;
-    db.notes = db.notes.filter((n) => n.id !== d.delNote);
-    save(); return render();
+    return confirmDialog("حذف هذه الملاحظة؟", () => {
+      db.notes = db.notes.filter((n) => n.id !== d.delNote);
+      save(); render();
+    });
   }
   if (d.page) { location.hash = mushafHash(d.page, r.tab !== "-" ? r.tab : "", r.extra !== "-" ? r.extra : ""); return; }
   if (d.tab) { location.hash = `#/student/${r.id}/${d.tab}`; return; }
   if (d.mfilter) { pageStudent.filter = d.mfilter; return render(); }
   if (d.editSession) return sessionForm(r.id, db.sessions.find((s) => s.id === d.editSession));
   if (d.delSession) {
-    if (!confirm("حذف هذا التسميع وأخطائه؟")) return;
-    db.sessions = db.sessions.filter((s) => s.id !== d.delSession);
-    db.mistakes = db.mistakes.filter((m) => m.sessionId !== d.delSession);
-    save(); return render();
+    return confirmDialog("حذف هذا التسميع وأخطائه؟", () => {
+      db.sessions = db.sessions.filter((s) => s.id !== d.delSession);
+      db.mistakes = db.mistakes.filter((m) => m.sessionId !== d.delSession);
+      save(); render();
+    });
   }
   if (d.resolve) {
     const items = db.mistakes.filter((m) => m.studentId === d.sid && mistakeKey(m) === d.resolve);
@@ -984,21 +1056,23 @@ view.addEventListener("click", (e) => {
     save(); render(); return toast(val ? "أحسنت! تم تعليمه كمُتقَن" : "أُعيد فتح الخطأ");
   }
   if (d.delMistake) {
-    if (!confirm("حذف آخر تسجيل لهذا الخطأ؟")) return;
-    db.mistakes = db.mistakes.filter((m) => m.id !== d.delMistake);
-    save(); return render();
+    return confirmDialog("حذف آخر تسجيل لهذا الخطأ؟", () => {
+      db.mistakes = db.mistakes.filter((m) => m.id !== d.delMistake);
+      save(); render();
+    });
   }
 
   switch (d.action) {
     case "add-student": return studentForm();
     case "edit-student": return studentForm(st);
     case "delete-student":
-      if (!confirm(`حذف الطالب ${st.name} وجميع سجلاته؟`)) return;
-      db.students = db.students.filter((s) => s.id !== st.id);
-      db.sessions = db.sessions.filter((s) => s.studentId !== st.id);
-      db.mistakes = db.mistakes.filter((m) => m.studentId !== st.id);
-      db.notes = db.notes.filter((n) => n.studentId !== st.id);
-      save(); location.hash = "#/students"; return;
+      return confirmDialog(`حذف الطالب ${st.name} وجميع سجلاته؟`, () => {
+        db.students = db.students.filter((s) => s.id !== st.id);
+        db.sessions = db.sessions.filter((s) => s.studentId !== st.id);
+        db.mistakes = db.mistakes.filter((m) => m.studentId !== st.id);
+        db.notes = db.notes.filter((n) => n.studentId !== st.id);
+        save(); location.hash = "#/students";
+      });
     case "new-session": return sessionForm(r.id);
     case "quick-mistake": return quickMistakeForm(r.id);
     case "add-note": return noteForm(r.id);
@@ -1006,15 +1080,8 @@ view.addEventListener("click", (e) => {
       $("[name=sessionTemplate]").value = DEFAULT_SESSION_TEMPLATE; return;
     case "reset-template":
       $("[name=template]").value = DEFAULT_TEMPLATE; return;
-    case "export": {
-      const blob = new Blob([JSON.stringify(db, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `halaqa-backup-${todayStr()}.json`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      return;
-    }
+    case "export": return backupDialog();
+    case "import": return restoreDialog();
   }
 });
 
@@ -1049,23 +1116,11 @@ view.addEventListener("change", (e) => {
     location.hash = mushafHash(page, sid, sid === r.tab && r.extra !== "-" ? r.extra : "");
     return;
   }
-  if (id !== "import-file" || !e.target.files[0]) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const data = JSON.parse(reader.result);
-      if (!Array.isArray(data.students)) throw new Error("bad file");
-      if (!confirm("سيتم استبدال البيانات الحالية بالنسخة المستوردة. متابعة؟")) return;
-      localStorage.setItem(STORE_KEY, JSON.stringify(data));
-      db = load(); render(); toast("تم الاستيراد");
-    } catch { toast("الملف غير صالح"); }
-  };
-  reader.readAsText(e.target.files[0]);
 });
 
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 render();
 
-if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
-}
+try {
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
+} catch {}
