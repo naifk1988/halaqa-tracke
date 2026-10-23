@@ -423,3 +423,19 @@ body.chrome-hidden .mstage { padding-top: max(6px, env(safe-area-inset-top, 0px)
 }
 .kind-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .kind-grid .btn { min-height: 48px; white-space: normal; }
+/* الصفحة تملأ الشاشة والأسطر موزعة عليها كالمطبوع */
+.mpage { min-height: 100%; }
+.mpage:not(.flowing) .lines { flex: 1; justify-content: space-between; }
+.qpc .line { line-height: 1.3; min-height: 1.3em; }
+.qpc .ayah-no.glyph {
+  display: inline; min-width: 0; height: auto; margin: 0; padding: 0; border: 0; border-radius: 4px;
+  background: none; font-size: inherit; font-family: inherit; line-height: inherit;
+}
+.qpc .ayah-no.glyph.m-now, .qpc .ayah-no.glyph.m-rep { color: var(--m-now); background: var(--m-now-bg); }
+.qpc .ayah-no.glyph.m-once { color: var(--m-once); }
+.qpc .ayah-no.glyph.m-ok { color: var(--m-ok); }
+.basm.amiri { font-family: "Amiri Quran", serif; }
+.flowing .lines { display: block; }
+.flow { text-align: justify; text-align-last: center; line-height: 2.3; font-size: 22px; }
+.flow .ayah-no { vertical-align: .1em; }
+.mpage .line > span { flex: none; }

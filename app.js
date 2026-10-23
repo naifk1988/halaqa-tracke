@@ -830,7 +830,8 @@ function lastStartAtOrBefore(starts, g) {
   while (i > 0 && starts[i] > g) i--;
   return i + 1;
 }
-const pageOf = (s, a) => lastStartAtOrBefore(MUSHAF_LINE_PAGE_STARTS, toGlobal(s, a));
+// ترقيم الصفحات واحد في كل التطبيق: ترقيم مصحف المدينة كما في Quran.com
+const pageOf = (s, a) => lastStartAtOrBefore(QPC_PAGES, toGlobal(s, a));
 const juzOf = (s, a) => lastStartAtOrBefore(JUZ_STARTS, toGlobal(s, a));
 const quarterOf = (g) => lastStartAtOrBefore(HIZB_QUARTERS, g);
 const toArabicDigits = (n) => String(n).replace(/\d/g, (d) => "٠١٢٣٤٥٦٧٨٩"[d]);
@@ -896,7 +897,7 @@ function reciteHash(sid) {
   const [s, a] = nextStart(sid);
   return mushafHash(`${s}-${a}`, sid);
 }
-const pageRange = (page) => [MUSHAF_LINE_PAGE_STARTS[page - 1], page < 604 ? MUSHAF_LINE_PAGE_STARTS[page] - 1 : 6236];
+const pageRange = (page) => [QPC_PAGES[page - 1], page < 604 ? QPC_PAGES[page] - 1 : 6236];
 
 const JUZ_NAMES = ["الأول", "الثاني", "الثالث", "الرابع", "الخامس", "السادس", "السابع", "الثامن", "التاسع", "العاشر",
   "الحادي عشر", "الثاني عشر", "الثالث عشر", "الرابع عشر", "الخامس عشر", "السادس عشر", "السابع عشر", "الثامن عشر", "التاسع عشر", "العشرون",
@@ -906,39 +907,187 @@ const JUZ_NAMES = ["الأول", "الثاني", "الثالث", "الرابع",
 // حالة شاشة المصحف الحالية (تُستعمل لتحديث الألوان دون إعادة رسم الصفحة)
 let mushafView = null;
 
-// الصفحة سطراً سطراً كما في مصحف المدينة: 15 سطراً، عنوان السورة المزخرف، والبسملة
-function mushafPageHtml(page) {
-  const lines = MUSHAF_LINES[page - 1];
-  const [first] = pageRange(page);
-  const surahs = [...new Set(lines.flatMap((l) => (Array.isArray(l) && typeof l[0] === "number" ? [fromGlobal(l[0])[0], fromGlobal(l[2])[0]] : [])))];
+/* ---------- صفحات مصحف المدينة بخط مجمع الملك فهد من Quran.com (كما في مصحف الوقوف) ---------- */
+const QPC_API = "https://api.quran.com/api/v4/verses/by_page/";
+const QPC_FONT_URLS = (p) => [
+  `https://static.qurancdn.com/fonts/quran/hafs/v2/woff2/p${p}.woff2`,
+  `https://verses.quran.foundation/fonts/quran/hafs/v2/woff2/p${p}.woff2`
+];
+const liveData = {};          // صفحات جاهزة للعرض بخط المجمع
+const liveLoading = {};
+let liveDownUntil = 0;        // بعد فشل الاتصال يُعرض الخط البديل دقيقة قبل المحاولة مجدداً
+let basmGlyph;                // البسملة بحروف صفحة 1
+
+function loadPageFont(p) {
+  return (async () => {
+    for (const u of QPC_FONT_URLS(p)) {
+      try {
+        const f = new FontFace("qpc" + p, `url(${u}) format("woff2")`);
+        await f.load();
+        document.fonts.add(f);
+        return true;
+      } catch {}
+    }
+    return false;
+  })();
+}
+
+function fetchLivePage(p) {
+  if (liveData[p]) return Promise.resolve(liveData[p]);
+  if (liveLoading[p]) return liveLoading[p];
+  liveLoading[p] = (async () => {
+    const url = `${QPC_API}${p}?words=true&per_page=all&fields=text_uthmani&word_fields=code_v2,text_uthmani,line_number,page_number,position,char_type_name`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 9000);
+    const r = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error("api " + r.status);
+    const j = await r.json();
+    if (!(await loadPageFont(p))) throw new Error("font");
+    liveData[p] = j.verses;
+    return j.verses;
+  })().catch((e) => { liveDownUntil = Date.now() + 60000; throw e; }).finally(() => { delete liveLoading[p]; });
+  return liveLoading[p];
+}
+async function ensureBasmala() {
+  if (basmGlyph !== undefined) return;
+  try {
+    const v = (await fetchLivePage(1)).find((x) => x.verse_key === "1:1");
+    basmGlyph = v.words.filter((w) => w.char_type_name === "word").map((w) => w.code_v2).join(" ");
+  } catch { basmGlyph = null; }
+}
+function prefetchLive(p) {
+  [p + 1, p - 1, p + 2].forEach((q) => { if (q >= 1 && q <= 604 && !liveData[q] && Date.now() > liveDownUntil) fetchLivePage(q).catch(() => {}); });
+}
+
+// مطابقة كلمات Quran.com بكلمات نصنا (قد تُكتب الكلمة الواحدة كلمتين، وقد تكون علامة السجدة رمزاً مستقلاً)
+const skel = (t) => String(t).normalize("NFC")
+  .replace(/[ؐ-ًؚ-ٰٟۖ-ۭ࣓-ࣿـ​-‏\d]/g, "")
+  .replace(/[ٱأإآءؤئاويىۥۦ\s]/g, "").replace(/ة/g, "ه");
+function alignTokens(mine, toks) {
+  const ms = mine.map(skel), ts = toks.map(skel);
+  const tryFrom = (i0) => {
+    const map = [];
+    let i = i0;
+    for (let j = 0; j < ts.length; j++) {
+      if (i >= ms.length) return null;
+      if (!ts[j]) { map.push(Math.max(i0, i - 1)); continue; }          // رمز بلا حروف (كعلامة السجدة) يتبع ما قبله
+      if (ts[j] === ms[i]) { map.push(i++); continue; }
+      if (j + 1 < ts.length && ts[j] + ts[j + 1] === ms[i]) { map.push(i, i); j++; i++; continue; }
+      return null;
+    }
+    return map;
+  };
+  // كلمات الآية في الصفحة قد تبدأ من وسطها إذا ابتدأت الآية في الصفحة السابقة
+  for (let i0 = 0; i0 < ms.length; i0++) { const m = tryFrom(i0); if (m) return m; }
+  return toks.map((_, k) => Math.min(k, mine.length - 1));
+}
+
+function pageHead(page, surahs) {
+  const first = pageRange(page)[0];
   const q = quarterOf(first);
   const hizb = Math.ceil(q / 4), part = (q - 1) % 4;
-  const head = `<div class="phead"><span>الجزء ${JUZ_NAMES[juzOf(...fromGlobal(first)) - 1]}، ${["", "ربع ", "نصف ", "ثلاثة أرباع "][part]}الحزب ${toArabicDigits(hizb)}</span>
-    <span class="ps">${surahs.map(surahName).join(" · ")}</span></div>`;
+  return `<div class="phead"><span>الجزء ${JUZ_NAMES[juzOf(...fromGlobal(first)) - 1]}، ${["", "ربع ", "نصف ", "ثلاثة أرباع "][part]}الحزب ${toArabicDigits(hizb)}</span>
+    <span class="ps">${surahs.map((x) => "سورة " + surahName(x)).join(" · ")}</span></div>`;
+}
+const sheadHtml = (s) => `<div class="line shead"><span class="ro r1"></span><span class="nm">سورة ${surahName(s)}</span><span class="ro r2"></span></div>`;
+const pageFoot = (page) => `<div class="pfoot"><span>${toArabicDigits(page)}</span></div>`;
+
+// الصفحة بخط المجمع: 15 سطراً كما في Quran.com، وفراغات العناوين والبسملة تُملأ بحسب موضعها
+function livePageHtml(p) {
+  const verses = liveData[p];
+  const lines = {};
+  const surahs = [];
+  for (const v of verses) {
+    const [s, a] = v.verse_key.split(":").map(Number);
+    if (!surahs.includes(s)) surahs.push(s);
+    const toks = v.words.filter((w) => w.page_number == null || w.page_number === p);
+    const wordToks = toks.filter((w) => w.char_type_name === "word");
+    const map = alignTokens(ayahText(s, a).split(" "), wordToks.map((w) => w.text_uthmani || ""));
+    let k = 0;
+    for (const w of toks) {
+      const L = (lines[w.line_number] = lines[w.line_number] || []);
+      if (w.char_type_name === "word") L.push(`<span class="w" data-base="w" data-s="${s}" data-a="${a}" data-i="${map[k++]}">${w.code_v2}</span>`);
+      else if (w.char_type_name === "end") L.push(`<span class="ayah-no glyph" data-base="ayah-no glyph" data-s="${s}" data-a="${a}">${w.code_v2}</span>`);
+    }
+  }
+  const nums = Object.keys(lines).map(Number).sort((x, y) => x - y);
+  const lastL = p <= 2 ? nums[nums.length - 1] : 15;
+  const slot = {};
+  const startsNext = (q) => { const g = QPC_PAGES[q - 1]; const [s, a] = fromGlobal(g); return a === 1 ? s : 0; };
+  for (let L = 1; L <= lastL;) {
+    if (lines[L]) { L++; continue; }
+    let e = L;
+    while (e + 1 <= lastL && !lines[e + 1]) e++;
+    const nextLine = lines[e + 1];
+    let s = 0;
+    if (nextLine) { const m = /data-s="(\d+)" data-a="1"/.exec(nextLine[0]); s = m ? Number(m[1]) : 0; }
+    else if (p < 604) s = startsNext(p + 1);  // سورة تبدأ في الصفحة التالية وعنوانها في آخر هذه
+    if (s) {
+      const gap = e - L + 1;
+      if (nextLine) {
+        if (s === 1 || s === 9) slot[e] = ["h", s];
+        else if (gap >= 2) { slot[e - 1] = ["h", s]; slot[e] = ["b"]; } else slot[e] = ["b"];
+      } else {
+        if (s !== 9 && gap >= 2) { slot[L] = ["h", s]; slot[L + 1] = ["b"]; } else slot[L] = ["h", s];
+      }
+    }
+    L = e + 1;
+  }
   let html = "";
-  for (const l of lines) {
-    if (!l) { html += `<div class="line"></div>`; continue; }
-    if (l[0] === "h") {
-      html += `<div class="line shead"><span class="ro r1"></span><span class="nm">سورة ${surahName(l[1])}</span><span class="ro r2"></span></div>`;
+  for (let L = 1; L <= lastL; L++) {
+    const arr = lines[L];
+    if (!arr) {
+      const sl = slot[L];
+      if (sl && sl[0] === "h") html += sheadHtml(sl[1]);
+      else if (sl) html += basmGlyph ? `<div class="line basm" style="font-family:qpc1">${basmGlyph}</div>` : `<div class="line basm amiri">${ayahText(1, 1)}</div>`;
+      else html += `<div class="line"></div>`;
       continue;
     }
-    if (l[0] === "b") { html += `<div class="line basm">${ayahText(1, 1)}</div>`; continue; }
-    let [g, w] = l;
-    const [g2, w2] = [l[2], l[3]];
-    let n = 0, parts = "";
-    while (true) {
-      const [s, a] = fromGlobal(g);
-      const words = ayahText(s, a).split(" ");
-      parts += `<span class="w" data-s="${s}" data-a="${a}" data-i="${w}">${words[w]}</span>`;
-      n++;
-      const lastOfAyah = w === words.length - 1;
-      if (lastOfAyah) parts += `<span class="ayah-no" data-s="${s}" data-a="${a}">${toArabicDigits(a)}</span>`;
-      if (g === g2 && w === w2) break;
-      if (lastOfAyah) { g++; w = 0; } else w++;
-    }
-    html += `<div class="line${page <= 2 || n <= 2 ? " center" : ""}">${parts}</div>`;
+    html += `<div class="line${p <= 2 || arr.length < 4 ? " center" : ""}">${arr.join("")}</div>`;
   }
-  return `<div class="mpage mushaf-page">${head}<div class="lines">${html}</div><div class="pfoot"><span>${toArabicDigits(page)}</span></div></div>`;
+  return `<div class="mpage mushaf-page qpc">${pageHead(p, surahs)}<div class="lines" style="font-family:qpc${p}">${html}</div>${pageFoot(p)}</div>`;
+}
+
+// الخط البديل (دون إنترنت أو في المعاينة): أسطر طبعة 1441 حين تطابق حدود الصفحة، وإلا نص متصل
+function localPageHtml(page) {
+  const [first, last] = pageRange(page);
+  const q = MUSHAF_LINE_PAGE_STARTS.indexOf(first) + 1;
+  const sameBounds = q > 0 && (q < 604 ? MUSHAF_LINE_PAGE_STARTS[q] - 1 : 6236) === last;
+  const surahs = [...new Set([fromGlobal(first)[0], fromGlobal(last)[0]])];
+  for (let s = surahs[0] + 1; s < surahs[surahs.length - 1]; s++) surahs.splice(-1, 0, s);
+  const wordSpan = (s, a, i, w) => `<span class="w" data-base="w" data-s="${s}" data-a="${a}" data-i="${i}">${w}</span>`;
+  const endSpan = (s, a) => `<span class="ayah-no" data-base="ayah-no" data-s="${s}" data-a="${a}">${toArabicDigits(a)}</span>`;
+  let html = "";
+  if (sameBounds) {
+    for (const l of MUSHAF_LINES[q - 1]) {
+      if (!l) { html += `<div class="line"></div>`; continue; }
+      if (l[0] === "h") { html += sheadHtml(l[1]); continue; }
+      if (l[0] === "b") { html += `<div class="line basm">${ayahText(1, 1)}</div>`; continue; }
+      let [g, w] = l;
+      let n = 0, parts = "";
+      while (true) {
+        const [s, a] = fromGlobal(g);
+        const words = ayahText(s, a).split(" ");
+        parts += wordSpan(s, a, w, words[w]);
+        n++;
+        const lastOfAyah = w === words.length - 1;
+        if (lastOfAyah) parts += endSpan(s, a);
+        if (g === l[2] && w === l[3]) break;
+        if (lastOfAyah) { g++; w = 0; } else w++;
+      }
+      html += `<div class="line${page <= 2 || n <= 2 ? " center" : ""}">${parts}</div>`;
+    }
+    return `<div class="mpage mushaf-page">${pageHead(page, surahs)}<div class="lines">${html}</div>${pageFoot(page)}</div>`;
+  }
+  html = `<div class="flow">`;
+  for (let g = first; g <= last; g++) {
+    const [s, a] = fromGlobal(g);
+    if (a === 1) html += `</div>${sheadHtml(s)}${s !== 1 && s !== 9 ? `<div class="line basm">${ayahText(1, 1)}</div>` : ""}<div class="flow">`;
+    html += ayahText(s, a).split(" ").map((w, i) => wordSpan(s, a, i, w)).join(" ") + " " + endSpan(s, a) + " ";
+  }
+  html += `</div>`;
+  return `<div class="mpage mushaf-page flowing">${pageHead(page, surahs)}<div class="lines">${html}</div>${pageFoot(page)}</div>`;
 }
 
 function pageMushaf(pageArg, sidArg, sesArg) {
@@ -989,7 +1138,7 @@ function pageMushaf(pageArg, sidArg, sesArg) {
       ${MISTAKE_KINDS.map((k) => `<button class="kchip ${k === mushafKind ? "on" : ""}" data-set-kind="${k}" role="radio" aria-checked="${k === mushafKind}">${k}</button>`).join("")}
     </div>` : ""}
     ${st && riwayaOf(st) !== DEFAULT_RIWAYA ? `<div class="mnote">🎙️ الطالب يقرأ برواية ${esc(riwayaOf(st))}، والمصحف المعروض برواية حفص.</div>` : ""}
-    <main class="mstage" id="mstage">${mushafPageHtml(page)}</main>
+    <main class="mstage" id="mstage"></main>
     <nav class="mpager" aria-label="التنقل بين الصفحات">
       <button data-page="${page + 1}" ${page >= 604 ? "disabled" : ""} aria-label="الصفحة التالية">التالية ‹</button>
       <input id="mushaf-page" inputmode="numeric" value="${page}" aria-label="رقم الصفحة">
@@ -1000,11 +1149,25 @@ function pageMushaf(pageArg, sidArg, sesArg) {
 
 // بعد الرسم: ملاءمة الأسطر للعرض، وتلوين الأخطاء، وحركة الانتقال
 function afterMushafRender() {
-  if (!mushafView || !$(".mpage")) return;
+  if (!mushafView || !$("#mstage")) return;
   refreshMushafMarks();
-  fitLines();
-  if (document.fonts) document.fonts.load('20px "Amiri Quran"').then(fitLines).catch(() => {});
-  slideIn();
+  const p = mushafView.page, stage = $("#mstage");
+  const show = (html, live) => {
+    if (!mushafView || mushafView.page !== p || !$("#mstage")) return;
+    $("#mstage").innerHTML = html;
+    refreshMushafMarks();
+    fitLines();
+    if (document.fonts) document.fonts.load(live ? `20px qpc${p}` : '20px "Amiri Quran"').then(fitLines).catch(() => {});
+    slideIn();
+    if (live) prefetchLive(p);
+  };
+  if (liveData[p] && basmGlyph !== undefined) return show(livePageHtml(p), true);
+  if (Date.now() < liveDownUntil) return show(localPageHtml(p), false);
+  const t = setTimeout(() => { if (!stage.firstChild) stage.innerHTML = `<div class="mloading">جارٍ تحميل الصفحة…</div>`; }, 300);
+  fetchLivePage(p).then(ensureBasmala).then(
+    () => { clearTimeout(t); show(livePageHtml(p), true); },
+    () => { clearTimeout(t); show(localPageHtml(p), false); }
+  );
 }
 
 // تحديث ألوان الكلمات والعداد فقط، دون إعادة بناء الصفحة (حتى يبقى التسميع سلساً)
@@ -1014,10 +1177,10 @@ function refreshMushafMarks() {
   const ses = mushafView.sesId && db.sessions.find((x) => x.id === mushafView.sesId);
   const marks = mushafMarks(sid, ses && ses.id);
   $$(".mpage .w").forEach((el) => {
-    el.className = "w " + (marks.get(`${el.dataset.s}:${el.dataset.a}:${el.dataset.i}`) || "");
+    el.className = el.dataset.base + " " + (marks.get(`${el.dataset.s}:${el.dataset.a}:${el.dataset.i}`) || "");
   });
   $$(".mpage .ayah-no").forEach((el) => {
-    el.className = "ayah-no " + (marks.get(`${el.dataset.s}:${el.dataset.a}`) || "");
+    el.className = el.dataset.base + " " + (marks.get(`${el.dataset.s}:${el.dataset.a}`) || "");
   });
   const count = ses ? sessionMistakes(ses).length : 0;
   const c = $("#mushaf-count");
@@ -1040,6 +1203,18 @@ function fitLines() {
   const avail = box.clientWidth;
   let fs = parseFloat(box.style.fontSize) || 22;
   let max = 0;
+  if (box.closest(".flowing")) {
+    // النص المتصل: يُصغَّر الخط حتى تتسع الصفحة كلها في الشاشة
+    const flow = $(".flow", box) || box;
+    let f = 24;
+    flow.style.fontSize = f + "px";
+    $$(".flow", box).forEach((x) => (x.style.fontSize = f + "px"));
+    while (f > 14 && stage.scrollHeight > stage.clientHeight + 1) {
+      f -= 1;
+      $$(".flow, .shead, .basm", box).forEach((x) => (x.style.fontSize = f + "px"));
+    }
+    return;
+  }
   $$(".line:not(.shead):not(.basm)", box).forEach((l) => {
     // الأسطر المتوسطة بينها فراغات ثابتة بين الكلمات تُحسب ضمن العرض
     let w = (parseFloat(getComputedStyle(l).columnGap) || 0) * Math.max(0, l.children.length - 1);
@@ -1050,7 +1225,8 @@ function fitLines() {
   let nf = fs * (avail * 0.97) / max;
   const n = $$(".line", box).length || 15;
   const free = stage.clientHeight - ($(".phead", stage)?.offsetHeight || 0) - ($(".pfoot", stage)?.offsetHeight || 0) - 24;
-  const hMax = free / (n * 1.9);
+  // خط المجمع أسطره متقاربة كالمطبوع، والخط البديل يحتاج مسافة أكبر للتشكيل
+  const hMax = free / (n * (box.closest(".qpc") ? 1.3 : 1.9));
   if (hMax > 10) nf = Math.min(nf, hMax);
   nf = Math.max(13, Math.min(44, nf));
   if (Math.abs(nf - fs) > 0.3) box.style.fontSize = nf.toFixed(2) + "px";
