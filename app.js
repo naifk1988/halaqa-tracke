@@ -10,16 +10,39 @@ const DEFAULT_TEMPLATE =
 {الأخطاء}
 وفقك الله وجعلك من أهل القرآن.
 {المعلم}`;
+const DEFAULT_SESSION_TEMPLATE =
+`السلام عليكم ورحمة الله وبركاته
+{الاسم} حفظه الله
+تقرير تسميع {التاريخ} — {الحلقة}
+📖 {التسميع}
+🎙️ الرواية: {الرواية}
+⭐ التقدير: {التقدير}
+{الأخطاء}
+{الملاحظات}
+{الواجب}
+{الموعد}
+{المعلم}`;
 
 const DAYS = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 const GRADES = ["ممتاز", "جيد جداً", "جيد", "مقبول", "يُعاد"];
 const SESSION_TYPES = { hifz: "حفظ جديد", murajaa: "مراجعة", tathbit: "تثبيت" };
-const MISTAKE_KINDS = ["نسيان/حفظ", "تشكيل", "تجويد", "تبديل كلمة", "تردد", "أخرى"];
+const MISTAKE_KINDS = ["نسيان/حفظ", "تشكيل", "تجويد", "تبديل كلمة", "تردد", "خلط بين الروايات", "أخرى"];
+// القرّاء العشرة وراويا كل منهم
+const QURRA = [
+  ["نافع", ["قالون", "ورش"]], ["ابن كثير", ["البزي", "قنبل"]], ["أبو عمرو", ["الدوري", "السوسي"]],
+  ["ابن عامر", ["هشام", "ابن ذكوان"]], ["عاصم", ["شعبة", "حفص"]], ["حمزة", ["خلف", "خلاد"]],
+  ["الكسائي", ["أبو الحارث", "الدوري"]], ["أبو جعفر", ["ابن وردان", "ابن جماز"]],
+  ["يعقوب", ["رويس", "روح"]], ["خلف العاشر", ["إسحاق", "إدريس"]]
+];
+const DEFAULT_RIWAYA = "حفص عن عاصم";
 
 function emptyDb() {
   return {
-    settings: { halaqaName: "حلقة القرآن", teacherName: "", countryCode: "966", template: DEFAULT_TEMPLATE, repeatThreshold: 2 },
-    students: [], sessions: [], mistakes: []
+    settings: {
+      halaqaName: "حلقة القرآن", teacherName: "", countryCode: "966", template: DEFAULT_TEMPLATE,
+      sessionTemplate: DEFAULT_SESSION_TEMPLATE, repeatThreshold: 2
+    },
+    students: [], sessions: [], mistakes: [], notes: []
   };
 }
 
@@ -42,6 +65,13 @@ function save() {
 }
 
 /* ============ أدوات مساعدة ============ */
+const riwayaOf = (st) => (st && st.riwaya) || DEFAULT_RIWAYA;
+function riwayaOptions(selected = DEFAULT_RIWAYA) {
+  return QURRA.map(([qari, rawis]) => `<optgroup label="قراءة ${qari}">${rawis.map((r) => {
+    const v = `${r} عن ${qari}`;
+    return `<option ${v === selected ? "selected" : ""}>${v}</option>`;
+  }).join("")}</optgroup>`).join("");
+}
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -158,16 +188,67 @@ function buildMessage(st, opts = {}) {
     }
   }
 
-  let text = s.template
-    .replaceAll("{الاسم}", st.name)
-    .replaceAll("{الحلقة}", s.halaqaName || "الحلقة")
-    .replaceAll("{الموعد}", fmtAppointment(nextAppointment(st)))
-    .replaceAll("{الواجب}", assignment)
-    .replaceAll("{الأخطاء}", mistakesText)
-    .replaceAll("{المعلم}", s.teacherName ? `معلمك: ${s.teacherName}` : "");
+  return fillTemplate(s.template, st, {
+    "{الموعد}": fmtAppointment(nextAppointment(st)),
+    "{الواجب}": assignment,
+    "{الأخطاء}": mistakesText
+  }, extra);
+}
+
+function fillTemplate(template, st, vars, extra = "") {
+  const s = db.settings;
+  const all = {
+    "{الاسم}": st.name,
+    "{الحلقة}": s.halaqaName || "الحلقة",
+    "{الرواية}": riwayaOf(st),
+    "{المعلم}": s.teacherName ? `معلمك: ${s.teacherName}` : "",
+    ...vars
+  };
+  let text = template;
+  for (const [k, v] of Object.entries(all)) text = text.replaceAll(k, v);
   if (extra.trim()) text += "\n" + extra.trim();
   // حذف الأسطر الفارغة المتتالية الناتجة عن المتغيرات الفارغة
   return text.split("\n").filter((l, i, arr) => l.trim() || (i > 0 && arr[i - 1].trim())).join("\n").trim();
+}
+
+/* ============ رسالة الجلسة ============ */
+// أخطاء التسميع: المرتبطة به، ومعها ما سُجّل بلا ربط في اليوم نفسه إن لم يكن للطالب تسميع آخر ذلك اليوم
+function sessionMistakes(ses) {
+  const sameDay = db.sessions.filter((x) => x.studentId === ses.studentId && x.date === ses.date).length;
+  return db.mistakes
+    .filter((m) => m.sessionId === ses.id || (!m.sessionId && sameDay === 1 && m.studentId === ses.studentId && m.date === ses.date))
+    .sort((a, b) => a.surah - b.surah || a.ayah - b.ayah || (a.wordIndex ?? 0) - (b.wordIndex ?? 0));
+}
+
+// عدد مرات الخطأ في الموضع نفسه حتى تاريخ معيّن (شاملاً)
+function occurrencesUntil(m, date) {
+  const k = mistakeKey(m);
+  return db.mistakes.filter((x) => x.studentId === m.studentId && x.date <= date && mistakeKey(x) === k).length;
+}
+
+function buildSessionMessage(st, ses, opts = {}) {
+  const { includeNotes = true, includeAssignment = true, includeAppointment = true, extra = "" } = opts;
+  const ms = sessionMistakes(ses);
+  let mistakesText;
+  if (ms.length) {
+    mistakesText = `📌 الأخطاء (${ms.length}):\n` + ms.map((m, i) => {
+      const n = occurrencesUntil(m, ses.date);
+      return `${i + 1}. ${surahName(m.surah)} آية ${m.ayah}${m.word ? `: «${m.word}»` : " (الآية كاملة)"} — ${m.kind}` +
+        `${m.note ? ` (${m.note})` : ""}${n > 1 ? ` ⚠️ تكرر ${timesAr(n)}` : ""}`;
+    }).join("\n");
+  } else {
+    mistakesText = "✅ لا أخطاء في هذا التسميع، بارك الله فيك.";
+  }
+  const appt = nextAppointment(st);
+  return fillTemplate(db.settings.sessionTemplate || DEFAULT_SESSION_TEMPLATE, st, {
+    "{التاريخ}": fmtDate(ses.date),
+    "{التسميع}": `${SESSION_TYPES[ses.type] || "تسميع"}: سورة ${surahName(ses.surah)} من آية ${ses.fromAyah} إلى ${ses.toAyah}`,
+    "{التقدير}": ses.grade || "",
+    "{الأخطاء}": mistakesText,
+    "{الملاحظات}": includeNotes && ses.notes ? `📝 ملاحظات الشيخ: ${ses.notes}` : "",
+    "{الواجب}": includeAssignment && ses.assignment ? `📚 الواجب القادم: ${ses.assignment}` : "",
+    "{الموعد}": includeAppointment && appt ? `🗓️ موعدك القادم: ${fmtAppointment(appt)}` : ""
+  }, extra);
 }
 
 function normalizePhone(phone) {
@@ -189,7 +270,7 @@ function openDialog(html, onSubmit, onClick = null) {
   form.onclick = onClick;
   form.onsubmit = (e) => {
     e.preventDefault();
-    if (onSubmit(new FormData(form), form) !== false) dlg.close();
+    if (onSubmit(new FormData(form), form, e.submitter) !== false) dlg.close();
   };
   $$("[data-close]", form).forEach((b) => b.addEventListener("click", () => dlg.close()));
   dlg.showModal();
@@ -210,12 +291,15 @@ function studentForm(st = {}) {
     <label><span>أيام الحلقة</span>
       <div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" name="days" value="${i}" ${days.includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div>
     </label>
-    <label><span>وقت الحلقة</span><input name="time" type="time" value="${esc(st.time || "16:00")}"></label>
-    <label><span>ملاحظات (المستوى، مقدار الحفظ الحالي…)</span><textarea name="notes">${esc(st.notes)}</textarea></label>
+    <div class="grid2">
+      <label><span>الرواية التي يقرأ بها</span><select name="riwaya">${riwayaOptions(riwayaOf(st))}</select></label>
+      <label><span>وقت الحلقة</span><input name="time" type="time" value="${esc(st.time || "16:00")}"></label>
+    </div>
+    <label><span>ملاحظات عامة (المستوى، مقدار الحفظ الحالي…)</span><textarea name="notes">${esc(st.notes)}</textarea></label>
     ${dlgActions()}`, (fd) => {
     const data = {
       name: fd.get("name").trim(), phone: fd.get("phone").trim(), guardianPhone: fd.get("guardianPhone").trim(),
-      days: fd.getAll("days").map(Number), time: fd.get("time"), notes: fd.get("notes").trim()
+      days: fd.getAll("days").map(Number), time: fd.get("time"), riwaya: fd.get("riwaya"), notes: fd.get("notes").trim()
     };
     if (st.id) Object.assign(st, data);
     else { const n = { id: uid(), createdAt: Date.now(), ...data }; db.students.push(n); location.hash = `#/student/${n.id}`; }
@@ -283,8 +367,13 @@ function sessionForm(studentId, ses = {}) {
     <div id="mistake-rows">${existingMistakes.map((m) => mistakeRowHtml(m)).join("")}</div>
     <button type="button" class="btn sm" data-add-row>+ إضافة خطأ</button>
     <label style="margin-top:12px"><span>الواجب القادم</span><input name="assignment" value="${esc(ses.assignment || "")}" placeholder="مثال: حفظ البقرة 21-30 ومراجعة 1-20"></label>
-    <label><span>ملاحظات المعلم</span><textarea name="notes">${esc(ses.notes || "")}</textarea></label>
-    ${dlgActions()}`, (fd, f) => {
+    <label><span>ملاحظات الشيخ للطالب (تُرسل معه في التقرير)</span><textarea name="notes" placeholder="مثال: أحسنت في المدود، انتبه للغنة في النون المشددة">${esc(ses.notes || "")}</textarea></label>
+    <label><span>ملاحظة خاصة بالشيخ (لا تُرسل)</span><input name="privateNote" value="${esc(ses.privateNote || "")}"></label>
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-close>إلغاء</button>
+      <button class="btn primary">حفظ</button>
+      <button class="btn whatsapp" data-send-after>حفظ وإرسال 📤</button>
+    </div>`, (fd, f, submitter) => {
     const surah = Number(fd.get("surah")), fromAyah = Number(fd.get("fromAyah")), toAyah = Number(fd.get("toAyah"));
     const max = surahAyahs(surah);
     if (fromAyah > toAyah || toAyah > max) { toast(`تحقق من الآيات: سورة ${surahName(surah)} عدد آياتها ${max}`); return false; }
@@ -292,7 +381,8 @@ function sessionForm(studentId, ses = {}) {
     if (!rows) return false;
     const data = {
       date: fd.get("date"), type: fd.get("type"), surah, fromAyah, toAyah,
-      grade: fd.get("grade"), assignment: fd.get("assignment").trim(), notes: fd.get("notes").trim()
+      grade: fd.get("grade"), assignment: fd.get("assignment").trim(), notes: fd.get("notes").trim(),
+      privateNote: fd.get("privateNote").trim()
     };
     let target = ses;
     if (ses.id) Object.assign(ses, data);
@@ -306,6 +396,8 @@ function sessionForm(studentId, ses = {}) {
       db.mistakes.push(m);
     }
     save(); render(); toast("تم حفظ التسميع");
+    // تُفتح نافذة الإرسال بعد إغلاق نافذة التسميع
+    if (submitter && "sendAfter" in submitter.dataset) setTimeout(() => sessionSendDialog(target.id));
   });
   bindMistakeRows(form, () => Number($("[name=surah]", form).value));
   if (!ses.id) $("[name=toAyah]", form).focus();
@@ -327,22 +419,20 @@ function quickMistakeForm(studentId) {
   bindMistakeRows(form, () => 1);
 }
 
-function reminderDialog(st) {
+// نافذة إرسال عامة: معاينة نص قابل للتعديل ثم واتساب أو SMS أو نسخ
+function messageDialog(st, { title, toggles = [], build, onSent }) {
   const hasPhone = st.phone || st.guardianPhone;
   const form = openDialog(`
-    <h2>رسالة تذكير — ${esc(st.name)}</h2>
-    <div class="row small">
-      <label class="row" style="margin:0"><input type="checkbox" name="inc_m" checked style="width:auto;min-height:0"> الأخطاء</label>
-      <label class="row" style="margin:0"><input type="checkbox" name="only_rep" style="width:auto;min-height:0"> المتكررة فقط</label>
-      <label class="row" style="margin:0"><input type="checkbox" name="inc_a" checked style="width:auto;min-height:0"> الواجب</label>
-    </div>
+    <h2>${title}</h2>
+    ${toggles.length ? `<div class="row small">${toggles.map((t) =>
+      `<label class="row" style="margin:0"><input type="checkbox" name="${t.name}" ${t.checked ? "checked" : ""} style="width:auto;min-height:0"> ${t.label}</label>`).join("")}</div>` : ""}
     <label style="margin-top:10px"><span>إرسال إلى</span>
       <select name="to">
         ${st.phone ? `<option value="phone">الطالب (${esc(st.phone)})</option>` : ""}
         ${st.guardianPhone ? `<option value="guardianPhone">ولي الأمر (${esc(st.guardianPhone)})</option>` : ""}
       </select></label>
-    <label><span>نص الرسالة (يمكنك تعديله)</span><textarea name="text" rows="10" style="min-height:220px"></textarea></label>
-    ${hasPhone ? "" : `<p class="badge warn">لا يوجد رقم جوال لهذا الطالب — يمكنك نسخ الرسالة</p>`}
+    <label><span>نص الرسالة (يمكنك تعديله)</span><textarea name="text" rows="12" style="min-height:260px"></textarea></label>
+    ${hasPhone ? "" : `<p class="badge warn">لا يوجد رقم جوال لهذا الطالب — أضفه من البيانات، أو انسخ الرسالة</p>`}
     <div class="row">
       ${hasPhone ? `<button type="button" class="btn whatsapp" data-send="wa">واتساب</button><button type="button" class="btn" data-send="sms">رسالة SMS</button>` : ""}
       <button type="button" class="btn" data-send="copy">نسخ</button>
@@ -350,27 +440,82 @@ function reminderDialog(st) {
       <button type="button" class="btn" data-close>إغلاق</button>
     </div>`, () => false);
   const refresh = () => {
-    $("[name=text]", form).value = buildMessage(st, {
-      includeMistakes: $("[name=inc_m]", form).checked,
-      onlyRepeated: $("[name=only_rep]", form).checked,
-      includeAssignment: $("[name=inc_a]", form).checked
-    });
+    const opts = {};
+    for (const t of toggles) opts[t.name] = $(`[name=${t.name}]`, form).checked;
+    $("[name=text]", form).value = build(opts);
   };
-  $$("[name=inc_m],[name=only_rep],[name=inc_a]", form).forEach((c) => c.addEventListener("change", refresh));
+  toggles.forEach((t) => $(`[name=${t.name}]`, form).addEventListener("change", refresh));
   refresh();
   form.onclick = async (e) => {
     const mode = e.target.dataset && e.target.dataset.send;
     if (!mode) return;
     const text = $("[name=text]", form).value;
-    const phone = st[$("[name=to]", form)?.value] || st.phone || st.guardianPhone;
     if (mode === "copy") {
       try { await navigator.clipboard.writeText(text); toast("تم نسخ الرسالة"); }
       catch { $("[name=text]", form).select(); document.execCommand("copy"); toast("تم النسخ"); }
       return;
     }
-    st.lastReminder = Date.now(); save();
+    const phone = st[$("[name=to]", form).value] || st.phone || st.guardianPhone;
+    if (onSent) { onSent(); save(); }
     window.open(mode === "wa" ? waLink(phone, text) : smsLink(phone, text), "_blank");
+    dlg.close(); render();
   };
+}
+
+function reminderDialog(st) {
+  messageDialog(st, {
+    title: `رسالة تذكير — ${esc(st.name)}`,
+    toggles: [
+      { name: "includeMistakes", label: "الأخطاء", checked: true },
+      { name: "onlyRepeated", label: "المتكررة فقط", checked: false },
+      { name: "includeAssignment", label: "الواجب", checked: true }
+    ],
+    build: (o) => buildMessage(st, o),
+    onSent: () => { st.lastReminder = Date.now(); }
+  });
+}
+
+function sessionSendDialog(sesId) {
+  const ses = db.sessions.find((x) => x.id === sesId);
+  const st = ses && getStudent(ses.studentId);
+  if (!st) return;
+  messageDialog(st, {
+    title: `إرسال تقرير التسميع — ${esc(st.name)}`,
+    toggles: [
+      { name: "includeNotes", label: "ملاحظات الشيخ", checked: true },
+      { name: "includeAssignment", label: "الواجب", checked: true },
+      { name: "includeAppointment", label: "الموعد القادم", checked: true }
+    ],
+    build: (o) => buildSessionMessage(st, ses, o),
+    onSent: () => { ses.sentAt = Date.now(); }
+  });
+}
+
+function noteForm(studentId, note = {}) {
+  openDialog(`
+    <h2>${note.id ? "تعديل الملاحظة" : "ملاحظة جديدة"} — ${esc(getStudent(studentId).name)}</h2>
+    <label><span>التاريخ</span><input name="date" type="date" required value="${esc(note.date || todayStr())}"></label>
+    <label><span>نص الملاحظة</span><textarea name="text" required style="min-height:140px" placeholder="مثال: تحسّن واضح في المراجعة، ويحتاج إلى ضبط أحكام الميم الساكنة">${esc(note.text || "")}</textarea></label>
+    <label class="row" style="margin:0 0 10px"><input type="checkbox" name="private" ${note.private ? "checked" : ""} style="width:auto;min-height:0"> ملاحظة خاصة بالشيخ (لا تُرسل للطالب)</label>
+    ${dlgActions()}`, (fd) => {
+    const data = { date: fd.get("date"), text: fd.get("text").trim(), private: fd.get("private") === "on" };
+    if (note.id) Object.assign(note, data);
+    else db.notes.push({ id: uid(), studentId, createdAt: Date.now(), ...data });
+    save(); render(); toast("تم حفظ الملاحظة");
+  });
+}
+
+function noteSendDialog(noteId) {
+  const note = db.notes.find((n) => n.id === noteId);
+  const st = note && getStudent(note.studentId);
+  if (!st) return;
+  const s = db.settings;
+  messageDialog(st, {
+    title: `إرسال ملاحظة — ${esc(st.name)}`,
+    build: () => fillTemplate(
+      `السلام عليكم ورحمة الله وبركاته\n{الاسم} حفظه الله\n📝 ملاحظة من شيخك (${fmtDate(note.date)}):\n${note.text}\n{المعلم}`, st, {}),
+    onSent: () => { note.sentAt = Date.now(); }
+  });
 }
 
 /* ============ الصفحات ============ */
@@ -396,6 +541,7 @@ function pageHome() {
   const openRepeated = db.students.map((s) => ({ s, g: groupMistakes(studentMistakes(s.id)).filter((g) => g.repeated && !g.resolved) }))
     .filter((x) => x.g.length).sort((a, b) => b.g.length - a.g.length);
   const weekAgo = todayStr(new Date(Date.now() - 7 * 864e5));
+  const unsent = db.sessions.filter((x) => x.date === todayStr() && !x.sentAt && getStudent(x.studentId));
 
   return `
     <h1>${esc(db.settings.halaqaName)}</h1>
@@ -406,6 +552,10 @@ function pageHome() {
       <div class="stat"><b>${openRepeated.reduce((a, x) => a + x.g.length, 0)}</b><span>خطأ متكرر لم يُتقن</span></div>
     </div>
     ${db.students.length === 0 ? `<div class="card empty">ابدأ بإضافة طلاب حلقتك<br><br><button class="btn primary" data-action="add-student">+ إضافة طالب</button></div>` : ""}
+    ${unsent.length ? `<h2>تقارير تسميع اليوم لم تُرسل (${unsent.length})</h2>
+      <div class="card"><ul class="list">${unsent.map((x) => `<li class="row between">
+        <span class="grow"><b>${esc(getStudent(x.studentId).name)}</b><br><span class="muted small">${surahName(x.surah)} ${x.fromAyah}–${x.toAyah} · ${sessionMistakes(x).length} خطأ</span></span>
+        <button class="btn sm whatsapp" data-send-session="${x.id}">📤 إرسال</button></li>`).join("")}</ul></div>` : ""}
     ${today.length ? `<h2>حلقة اليوم (${DAYS[todayDow]})</h2>
       <div class="card"><ul class="list">${today.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`)).join("")}</ul></div>` : ""}
     ${tomorrow.length ? `<h2>حلقة الغد (${DAYS[tomorrowDow]}) — ذكّرهم الليلة</h2>
@@ -442,18 +592,20 @@ function pageStudent(id, tab) {
   let body = "";
   if (tab === "log") {
     body = sessions.length ? sessions.map((s) => {
-      const ms = db.mistakes.filter((m) => m.sessionId === s.id);
+      const ms = sessionMistakes(s);
       const gradeCls = s.grade === "يُعاد" ? "danger" : s.grade === "مقبول" ? "warn" : "ok";
       return `<div class="card">
         <div class="row between">
           <b>${SESSION_TYPES[s.type] || ""}: ${surahName(s.surah)} ${s.fromAyah}–${s.toAyah}</b>
           <span class="badge ${gradeCls}">${esc(s.grade)}</span>
         </div>
-        <div class="muted small">${fmtDate(s.date)}</div>
+        <div class="muted small">${fmtDate(s.date)}${s.sentAt ? ` · <span class="badge ok">أُرسل للطالب ✓</span>` : ""}</div>
         ${ms.length ? `<div class="small" style="margin-top:6px">الأخطاء (${ms.length}): ${ms.map((m) => `<span class="badge warn">${m.ayah}${m.word ? ": " + esc(m.word) : ""}</span>`).join(" ")}</div>` : `<div class="small" style="margin-top:6px"><span class="badge ok">بلا أخطاء</span></div>`}
         ${s.assignment ? `<div class="small" style="margin-top:6px">📝 الواجب: ${esc(s.assignment)}</div>` : ""}
-        ${s.notes ? `<div class="small muted" style="margin-top:4px">${esc(s.notes)}</div>` : ""}
+        ${s.notes ? `<div class="small" style="margin-top:4px">💬 ملاحظات الشيخ: ${esc(s.notes)}</div>` : ""}
+        ${s.privateNote ? `<div class="small muted" style="margin-top:4px">🔒 ${esc(s.privateNote)}</div>` : ""}
         <div class="row" style="margin-top:8px">
+          <button class="btn sm whatsapp" data-send-session="${s.id}">📤 ${s.sentAt ? "إعادة إرسال" : "إرسال للطالب"}</button>
           <a class="btn sm" href="${mushafHash(`${s.surah}-${s.fromAyah}`, id, s.id)}">📖 المصحف</a>
           <button class="btn sm" data-edit-session="${s.id}">تعديل</button>
           <button class="btn sm danger" data-del-session="${s.id}">حذف</button>
@@ -472,10 +624,27 @@ function pageStudent(id, tab) {
         <button class="btn sm primary" data-action="quick-mistake">+ خطأ</button>
       </div>
       ${shown.length ? shown.map(mistakeGroupCard).join("") : `<div class="card empty">لا توجد أخطاء هنا</div>`}`;
+  } else if (tab === "notes") {
+    const notes = db.notes.filter((n) => n.studentId === id).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+    body = `
+      <div class="row between" style="margin-bottom:10px">
+        <span class="small muted">ملاحظات الشيخ على الطالب، ويمكن إرسالها له بواتساب.</span>
+        <button class="btn sm primary" data-action="add-note">+ ملاحظة</button>
+      </div>
+      ${notes.length ? notes.map((n) => `<div class="card">
+        <div class="row between"><span class="muted small">${fmtDate(n.date)}</span>
+          ${n.private ? `<span class="badge">🔒 خاصة</span>` : n.sentAt ? `<span class="badge ok">أُرسلت ✓</span>` : ""}</div>
+        <div class="note-text">${esc(n.text)}</div>
+        <div class="row" style="margin-top:8px">
+          ${n.private ? "" : `<button class="btn sm whatsapp" data-send-note="${n.id}">📤 إرسال</button>`}
+          <button class="btn sm" data-edit-note="${n.id}">تعديل</button>
+          <button class="btn sm danger" data-del-note="${n.id}">حذف</button>
+        </div></div>`).join("") : `<div class="card empty">لا توجد ملاحظات بعد</div>`}`;
   } else if (tab === "info") {
     body = `<div class="card">
       <p><b>الجوال:</b> ${esc(st.phone) || "—"}</p>
       <p><b>ولي الأمر:</b> ${esc(st.guardianPhone) || "—"}</p>
+      <p><b>الرواية:</b> ${esc(riwayaOf(st))}</p>
       <p><b>أيام الحلقة:</b> ${(st.days || []).map((d) => DAYS[d]).join("، ") || "—"} ${st.time ? "— " + fmtTime(st.time) : ""}</p>
       <p><b>آخر تذكير:</b> ${st.lastReminder ? new Date(st.lastReminder).toLocaleString("ar") : "—"}</p>
       ${st.notes ? `<p><b>ملاحظات:</b> ${esc(st.notes)}</p>` : ""}
@@ -488,6 +657,7 @@ function pageStudent(id, tab) {
       <div class="row">
         <span class="avatar">${initials(st.name)}</span>
         <div class="grow"><h1 style="margin:0">${esc(st.name)}</h1>
+          <div class="small"><span class="badge">🎙️ ${esc(riwayaOf(st))}</span></div>
           <div class="muted small">الموعد القادم: ${fmtAppointment(appt)}</div></div>
       </div>
       <div class="stats" style="margin:12px 0 0">
@@ -502,7 +672,8 @@ function pageStudent(id, tab) {
       </div>
     </div>
     <div class="tabs">
-      ${[["log", "دفتر المتابعة"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`], ["info", "البيانات"]]
+      ${[["log", "دفتر المتابعة"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`],
+        ["notes", `الملاحظات (${db.notes.filter((n) => n.studentId === id).length})`], ["info", "البيانات"]]
         .map(([k, v]) => `<button data-tab="${k}" class="${tab === k ? "active" : ""}">${v}</button>`).join("")}
     </div>
     ${body}`;
@@ -573,8 +744,12 @@ function pageSettings() {
         <label><span>يُعدّ الخطأ متكرراً بعد</span><select name="repeatThreshold">${[2, 3, 4].map((n) => `<option value="${n}" ${n === s.repeatThreshold ? "selected" : ""}>${n} مرات</option>`).join("")}</select></label>
       </div>
       <label><span>قالب رسالة التذكير</span><textarea name="template" rows="9" style="min-height:200px">${esc(s.template)}</textarea></label>
-      <p class="small muted">المتغيرات المتاحة: {الاسم} {الحلقة} {الموعد} {الواجب} {الأخطاء} {المعلم}</p>
-      <div class="row"><button class="btn primary">حفظ الإعدادات</button><button type="button" class="btn" data-action="reset-template">استعادة القالب الافتراضي</button></div>
+      <p class="small muted">المتغيرات المتاحة: {الاسم} {الحلقة} {الرواية} {الموعد} {الواجب} {الأخطاء} {المعلم}</p>
+      <button type="button" class="btn sm" data-action="reset-template">استعادة القالب الافتراضي</button>
+      <label style="margin-top:14px"><span>قالب تقرير التسميع (يُرسل بعد كل جلسة)</span><textarea name="sessionTemplate" rows="11" style="min-height:240px">${esc(s.sessionTemplate)}</textarea></label>
+      <p class="small muted">المتغيرات المتاحة: {الاسم} {الحلقة} {الرواية} {التاريخ} {التسميع} {التقدير} {الأخطاء} {الملاحظات} {الواجب} {الموعد} {المعلم}</p>
+      <button type="button" class="btn sm" data-action="reset-session-template">استعادة القالب الافتراضي</button>
+      <div class="row" style="margin-top:14px"><button class="btn primary">حفظ الإعدادات</button></div>
     </form>
     <h2>النسخ الاحتياطي</h2>
     <div class="card">
@@ -686,6 +861,7 @@ function pageMushaf(pageArg, sidArg, sesArg) {
           </select></label>
         <label style="margin:0"><span>السورة</span><select id="mushaf-surah">${surahOptions(s0)}</select></label>
       </div>
+      ${sid && riwayaOf(getStudent(sid)) !== DEFAULT_RIWAYA ? `<p class="small warn-note">🎙️ الطالب يقرأ برواية <b>${esc(riwayaOf(getStudent(sid)))}</b>، والنص المعروض برواية حفص عن عاصم؛ فانتبه لفروق الكلمات وعدّ الآي بين الروايتين.</p>` : ""}
       ${ses ? `<p class="small" style="margin:8px 0 0">تسميع ${fmtDate(ses.date)}: ${surahName(ses.surah)} ${ses.fromAyah}–${ses.toAyah} — الأخطاء تُضاف إلى هذا التسميع</p>` : ""}
     </div>
     <div class="row between mushaf-nav">
@@ -783,6 +959,14 @@ view.addEventListener("click", (e) => {
   const d = t.dataset;
 
   if (d.remind) return reminderDialog(getStudent(d.remind));
+  if (d.sendSession) return sessionSendDialog(d.sendSession);
+  if (d.sendNote) return noteSendDialog(d.sendNote);
+  if (d.editNote) return noteForm(r.id, db.notes.find((n) => n.id === d.editNote));
+  if (d.delNote) {
+    if (!confirm("حذف هذه الملاحظة؟")) return;
+    db.notes = db.notes.filter((n) => n.id !== d.delNote);
+    save(); return render();
+  }
   if (d.page) { location.hash = mushafHash(d.page, r.tab !== "-" ? r.tab : "", r.extra !== "-" ? r.extra : ""); return; }
   if (d.tab) { location.hash = `#/student/${r.id}/${d.tab}`; return; }
   if (d.mfilter) { pageStudent.filter = d.mfilter; return render(); }
@@ -813,9 +997,13 @@ view.addEventListener("click", (e) => {
       db.students = db.students.filter((s) => s.id !== st.id);
       db.sessions = db.sessions.filter((s) => s.studentId !== st.id);
       db.mistakes = db.mistakes.filter((m) => m.studentId !== st.id);
+      db.notes = db.notes.filter((n) => n.studentId !== st.id);
       save(); location.hash = "#/students"; return;
     case "new-session": return sessionForm(r.id);
     case "quick-mistake": return quickMistakeForm(r.id);
+    case "add-note": return noteForm(r.id);
+    case "reset-session-template":
+      $("[name=sessionTemplate]").value = DEFAULT_SESSION_TEMPLATE; return;
     case "reset-template":
       $("[name=template]").value = DEFAULT_TEMPLATE; return;
     case "export": {
@@ -845,7 +1033,7 @@ view.addEventListener("submit", (e) => {
   const fd = new FormData(e.target);
   Object.assign(db.settings, {
     halaqaName: fd.get("halaqaName").trim(), teacherName: fd.get("teacherName").trim(),
-    countryCode: fd.get("countryCode").replace(/\D/g, ""), template: fd.get("template"),
+    countryCode: fd.get("countryCode").replace(/\D/g, ""), template: fd.get("template"), sessionTemplate: fd.get("sessionTemplate"),
     repeatThreshold: Number(fd.get("repeatThreshold"))
   });
   save(); render(); toast("تم حفظ الإعدادات");
