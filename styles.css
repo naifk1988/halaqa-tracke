@@ -13,6 +13,7 @@
   --ok: #15803d;
   --ok-soft: #dcfce7;
   --radius: 14px;
+  --topbar-h: 50px;
   --topbar: #0f766e;
   --on-primary: #ffffff;
   --paper: #fffdf5;
@@ -104,7 +105,8 @@ body {
 a { color: var(--primary); text-decoration: none; }
 
 .topbar {
-  position: sticky; top: 0; z-index: 5;
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  height: var(--topbar-h); box-sizing: border-box; display: flex; align-items: center;
   background: var(--topbar); color: #fff;
   padding: 10px 16px;
 }
@@ -272,3 +274,34 @@ dialog::backdrop { background: var(--backdrop); }
 .warn-note { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ============ التسميع على المصحف ============ */
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--topbar); }
+.rec-bar {
+  position: sticky; top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); z-index: 4;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 6px 16px -12px rgba(0, 0, 0, .5);
+}
+.rec-count { font-variant-numeric: tabular-nums; }
+.kind-chips { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; scrollbar-width: none; }
+.kchip {
+  flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  border-radius: 999px; padding: 4px 12px; font: inherit; font-size: .85rem; cursor: pointer; min-height: 34px;
+}
+.kchip.on { background: var(--danger); border-color: var(--danger); color: var(--card); font-weight: 700; }
+.mushaf-page .w, .mushaf-page .ayah-no { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.w.m-now, .ayah-no.m-now { background: var(--danger); color: var(--card); text-decoration: none; font-weight: 400; }
+.w.m-now.m-rep { box-shadow: 0 0 0 2px var(--warn); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; margin: 0; cursor: pointer; position: relative; }
+.chip input { position: absolute; opacity: 0; width: 1px; height: 1px; min-height: 0; }
+.chip span { border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; background: var(--bg); }
+.chip input:checked + span { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 700; }
+.chip input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+.field-label { margin: 12px 0 6px; font-size: .9rem; color: var(--muted); }
+.sheet-summary { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.range-edit { margin-top: 10px; }
+.draft-card { border-color: var(--danger); border-style: dashed; }
+.qw { font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 1.1em; line-height: 1.6; }
+.word.qw { font-size: 1.5rem; font-weight: 400; }

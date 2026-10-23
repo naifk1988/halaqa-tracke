@@ -97,7 +97,7 @@ function fmtTime(t) {
 // تطبيع الكلمة لمقارنة الأخطاء المتكررة: إزالة التشكيل وتوحيد الهمزات
 function normalizeWord(w) {
   return String(w || "")
-    .replace(/[ؐ-ًؚ-ٰٟۖ-ۭـ]/g, "")
+    .replace(/[ؐ-ًؚ-ٰٟۖ-ۭ\u08F0-\u08F2ـ]/g, "")
     .replace(/[أإآٱ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
     .replace(/\s+/g, " ").trim();
 }
@@ -121,6 +121,20 @@ function surahOptions(selected) {
 const getStudent = (id) => db.students.find((s) => s.id === id);
 const studentSessions = (id) => db.sessions.filter((s) => s.studentId === id).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
 const studentMistakes = (id) => db.mistakes.filter((m) => m.studentId === id);
+// التسميع الجاري (لم يُنهَ بعد) يُحفظ مسودة حتى يضغط الشيخ «إنهاء التسميع»
+const finishedSessions = (id) => studentSessions(id).filter((s) => !s.draft);
+const draftSession = (id) => studentSessions(id).find((s) => s.draft);
+// نهاية المقطع؛ قد يمتد التسميع عبر أكثر من سورة
+const sesEnd = (s) => [s.toSurah || s.surah, s.toAyah || s.fromAyah];
+function rangeText(s) {
+  const [ts, ta] = sesEnd(s);
+  return ts === s.surah ? `${surahName(s.surah)} ${s.fromAyah}–${ta}` : `${surahName(s.surah)} ${s.fromAyah} ← ${surahName(ts)} ${ta}`;
+}
+function rangeLong(s) {
+  const [ts, ta] = sesEnd(s);
+  return ts === s.surah ? `سورة ${surahName(s.surah)} من آية ${s.fromAyah} إلى ${ta}`
+    : `من سورة ${surahName(s.surah)} آية ${s.fromAyah} إلى سورة ${surahName(ts)} آية ${ta}`;
+}
 
 // تجميع أخطاء الطالب حسب الموضع (السورة + الآية + الكلمة)
 function groupMistakes(list) {
@@ -165,8 +179,9 @@ function hifzAyahCount(id) {
   // عدد الآيات المحفوظة (بدون تكرار) من جلسات الحفظ الجديد
   const set = new Set();
   for (const s of db.sessions) {
-    if (s.studentId !== id || s.type !== "hifz") continue;
-    for (let a = s.fromAyah; a <= s.toAyah; a++) set.add(`${s.surah}:${a}`);
+    if (s.studentId !== id || s.type !== "hifz" || s.draft) continue;
+    const end = toGlobal(...sesEnd(s));
+    for (let g = toGlobal(s.surah, s.fromAyah); g <= end; g++) set.add(g);
   }
   return set.size;
 }
@@ -175,7 +190,7 @@ function hifzAyahCount(id) {
 function buildMessage(st, opts = {}) {
   const s = db.settings;
   const { includeMistakes = true, includeAssignment = true, onlyRepeated = false, extra = "" } = opts;
-  const last = studentSessions(st.id)[0];
+  const last = finishedSessions(st.id)[0];
   const assignment = includeAssignment && last && last.assignment ? `الواجب المطلوب: ${last.assignment}` : "";
 
   let mistakesText = "";
@@ -204,7 +219,8 @@ function fillTemplate(template, st, vars, extra = "") {
     "{المعلم}": s.teacherName ? `معلمك: ${s.teacherName}` : "",
     ...vars
   };
-  let text = template;
+  // السطر الذي ليس فيه إلا متغير فارغ يُحذف كله
+  let text = template.split("\n").filter((l) => !(l.trim() in all) || all[l.trim()]).join("\n");
   for (const [k, v] of Object.entries(all)) text = text.replaceAll(k, v);
   if (extra.trim()) text += "\n" + extra.trim();
   // حذف الأسطر الفارغة المتتالية الناتجة عن المتغيرات الفارغة
@@ -242,7 +258,7 @@ function buildSessionMessage(st, ses, opts = {}) {
   const appt = nextAppointment(st);
   return fillTemplate(db.settings.sessionTemplate || DEFAULT_SESSION_TEMPLATE, st, {
     "{التاريخ}": fmtDate(ses.date),
-    "{التسميع}": `${SESSION_TYPES[ses.type] || "تسميع"}: سورة ${surahName(ses.surah)} من آية ${ses.fromAyah} إلى ${ses.toAyah}`,
+    "{التسميع}": `${SESSION_TYPES[ses.type] || "تسميع"}: ${rangeLong(ses)}`,
     "{التقدير}": ses.grade || "",
     "{الأخطاء}": mistakesText,
     "{الملاحظات}": includeNotes && ses.notes ? `📝 ملاحظات الشيخ: ${ses.notes}` : "",
@@ -307,116 +323,77 @@ function studentForm(st = {}) {
   });
 }
 
-function mistakeRowHtml(m = {}, defSurah = 1) {
-  return `<div class="mistake-row">
-    <div class="grid3">
-      <label><span>السورة</span><select name="m_surah">${surahOptions(m.surah || defSurah)}</select></label>
-      <label><span>الآية</span><input name="m_ayah" type="number" min="1" required value="${esc(m.ayah || "")}"></label>
-      <label><span>النوع</span><select name="m_kind">${MISTAKE_KINDS.map((k) => `<option ${k === m.kind ? "selected" : ""}>${k}</option>`).join("")}</select></label>
-    </div>
-    <div class="row">
-      <label class="grow" style="margin:0"><span>الكلمة أو الموضع</span><input name="m_word" value="${esc(m.word || "")}" placeholder="مثال: الرَّحِيمِ"></label>
-      <button type="button" class="btn sm danger" data-remove-row style="align-self:flex-end">حذف</button>
-    </div>
-  </div>`;
+// خيارات بشكل أزرار (بدل القوائم) لتسريع الإدخال
+function chips(name, options, selected) {
+  return `<div class="chips">${options.map(([v, label]) =>
+    `<label class="chip"><input type="radio" name="${name}" value="${esc(v)}" ${v === selected ? "checked" : ""}><span>${label}</span></label>`).join("")}</div>`;
 }
 
-function readMistakeRows(form) {
-  const rows = [];
-  for (const row of $$(".mistake-row", form)) {
-    const surah = Number($("[name=m_surah]", row).value);
-    const ayah = Number($("[name=m_ayah]", row).value);
-    const word = $("[name=m_word]", row).value.trim();
-    const kind = $("[name=m_kind]", row).value;
-    if (!ayah) continue;
-    if (ayah > surahAyahs(surah)) { toast(`سورة ${surahName(surah)} عدد آياتها ${surahAyahs(surah)} فقط`); return null; }
-    rows.push({ surah, ayah, word, kind });
-  }
-  return rows;
-}
-
-function bindMistakeRows(form, getDefSurah) {
-  form.onclick = (e) => {
-    if (e.target.matches("[data-add-row]")) {
-      const rows = $("#mistake-rows", form);
-      rows.insertAdjacentHTML("beforeend", mistakeRowHtml({}, getDefSurah()));
-      $("[name=m_ayah]", rows.lastElementChild).focus();
-    } else if (e.target.matches("[data-remove-row]")) {
-      e.target.closest(".mistake-row").remove();
-    }
-  };
-}
-
-function sessionForm(studentId, ses = {}) {
-  const last = studentSessions(studentId)[0];
-  const defSurah = ses.surah || (last ? last.surah : 1);
-  const existingMistakes = ses.id ? db.mistakes.filter((m) => m.sessionId === ses.id) : [];
+// ورقة إنهاء التسميع: كل شيء معبأ مسبقاً، ويكفي الضغط على «حفظ»
+function finishSheet(ses, { afterSave } = {}) {
+  const st = getStudent(ses.studentId);
+  const ms = sessionMistakes(ses);
+  const [ts, ta] = sesEnd(ses);
+  const prev = finishedSessions(st.id).find((x) => x.id !== ses.id);
+  const type = ses.type || (prev ? prev.type : "hifz");
   const form = openDialog(`
-    <h2>${ses.id ? "تعديل التسميع" : "تسميع جديد"} — ${esc(getStudent(studentId).name)}</h2>
-    <div class="grid2">
-      <label><span>التاريخ</span><input name="date" type="date" required value="${esc(ses.date || todayStr())}"></label>
-      <label><span>النوع</span><select name="type">${Object.entries(SESSION_TYPES).map(([k, v]) => `<option value="${k}" ${k === ses.type ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+    <h2>${ses.draft ? "إنهاء التسميع" : "تعديل التسميع"} — ${esc(st.name)}</h2>
+    <div class="sheet-summary">
+      <div class="row between"><b>📖 ${rangeText({ ...ses, toSurah: ts, toAyah: ta })}</b>
+        <button type="button" class="btn sm" data-edit-range>تعديل المقطع</button></div>
+      <div class="range-edit" hidden>
+        <div class="grid2">
+          <label><span>من سورة</span><select name="surah">${surahOptions(ses.surah)}</select></label>
+          <label><span>آية</span><input name="fromAyah" type="number" min="1" value="${ses.fromAyah}"></label>
+          <label><span>إلى سورة</span><select name="toSurah">${surahOptions(ts)}</select></label>
+          <label><span>آية</span><input name="toAyah" type="number" min="1" value="${ta}"></label>
+        </div>
+        <label><span>التاريخ</span><input name="date" type="date" value="${esc(ses.date)}"></label>
+      </div>
+      <div class="small" style="margin-top:6px">${ms.length
+        ? `الأخطاء (${ms.length}): ${ms.map((m) => `<span class="badge warn">${m.word ? `<span class="qw">${esc(m.word)}</span>` : `آية ${m.ayah} كاملة`}</span>`).join(" ")}`
+        : `<span class="badge ok">✅ بلا أخطاء</span>`}</div>
     </div>
-    <div class="grid3">
-      <label><span>السورة</span><select name="surah">${surahOptions(defSurah)}</select></label>
-      <label><span>من آية</span><input name="fromAyah" type="number" min="1" required value="${esc(ses.fromAyah || 1)}"></label>
-      <label><span>إلى آية</span><input name="toAyah" type="number" min="1" required value="${esc(ses.toAyah || "")}"></label>
-    </div>
-    <label><span>التقدير</span><select name="grade">${GRADES.map((g) => `<option ${g === ses.grade ? "selected" : ""}>${g}</option>`).join("")}</select></label>
-    <h3>الأخطاء في هذا التسميع</h3>
-    <div id="mistake-rows">${existingMistakes.map((m) => mistakeRowHtml(m)).join("")}</div>
-    <button type="button" class="btn sm" data-add-row>+ إضافة خطأ</button>
-    <label style="margin-top:12px"><span>الواجب القادم</span><input name="assignment" value="${esc(ses.assignment || "")}" placeholder="مثال: حفظ البقرة 21-30 ومراجعة 1-20"></label>
-    <label><span>ملاحظات الشيخ للطالب (تُرسل معه في التقرير)</span><textarea name="notes" placeholder="مثال: أحسنت في المدود، انتبه للغنة في النون المشددة">${esc(ses.notes || "")}</textarea></label>
+    <p class="field-label">النوع</p>
+    ${chips("type", Object.entries(SESSION_TYPES), type)}
+    <p class="field-label">التقدير</p>
+    ${chips("grade", GRADES.map((g) => [g, g]), ses.grade || (ms.length === 0 ? "ممتاز" : ms.length <= 2 ? "جيد جداً" : ms.length <= 5 ? "جيد" : "مقبول"))}
+    <label style="margin-top:12px"><span>ملاحظات الشيخ للطالب (اختياري، تُرسل معه)</span><textarea name="notes" placeholder="مثال: أحسنت في المدود، انتبه للغنة">${esc(ses.notes || "")}</textarea></label>
+    <label><span>الواجب القادم (اختياري)</span><input name="assignment" value="${esc(ses.assignment || "")}"></label>
     <label><span>ملاحظة خاصة بالشيخ (لا تُرسل)</span><input name="privateNote" value="${esc(ses.privateNote || "")}"></label>
     <div class="dlg-actions">
-      <button type="button" class="btn" data-close>إلغاء</button>
+      <button type="button" class="btn" data-close>رجوع</button>
       <button class="btn primary">حفظ</button>
       <button class="btn whatsapp" data-send-after>حفظ وإرسال 📤</button>
     </div>`, (fd, f, submitter) => {
-    const surah = Number(fd.get("surah")), fromAyah = Number(fd.get("fromAyah")), toAyah = Number(fd.get("toAyah"));
-    const max = surahAyahs(surah);
-    if (fromAyah > toAyah || toAyah > max) { toast(`تحقق من الآيات: سورة ${surahName(surah)} عدد آياتها ${max}`); return false; }
-    const rows = readMistakeRows(f);
-    if (!rows) return false;
-    const data = {
-      date: fd.get("date"), type: fd.get("type"), surah, fromAyah, toAyah,
-      grade: fd.get("grade"), assignment: fd.get("assignment").trim(), notes: fd.get("notes").trim(),
-      privateNote: fd.get("privateNote").trim()
-    };
-    let target = ses;
-    if (ses.id) Object.assign(ses, data);
-    else { target = { id: uid(), studentId, createdAt: Date.now(), ...data }; db.sessions.push(target); }
-    // استبدال أخطاء هذا التسميع مع الحفاظ على حالة "أُتقن"
-    const oldResolved = new Map(existingMistakes.map((m) => [mistakeKey(m), m.resolved]));
-    db.mistakes = db.mistakes.filter((m) => m.sessionId !== target.id);
-    for (const r of rows) {
-      const m = { id: uid(), studentId, sessionId: target.id, date: data.date, ...r };
-      m.resolved = oldResolved.get(mistakeKey(m)) || false;
-      db.mistakes.push(m);
+    const surah = Number(fd.get("surah")), fromAyah = Number(fd.get("fromAyah"));
+    const toSurah = Number(fd.get("toSurah")), toAyah = Number(fd.get("toAyah"));
+    if (!fromAyah || fromAyah > surahAyahs(surah) || !toAyah || toAyah > surahAyahs(toSurah)) {
+      $(".range-edit", f).hidden = false;
+      toast("تحقق من أرقام الآيات في المقطع"); return false;
     }
-    save(); render(); toast("تم حفظ التسميع");
-    // تُفتح نافذة الإرسال بعد إغلاق نافذة التسميع
-    if (submitter && "sendAfter" in submitter.dataset) setTimeout(() => sessionSendDialog(target.id));
+    if (toGlobal(toSurah, toAyah) < toGlobal(surah, fromAyah)) {
+      $(".range-edit", f).hidden = false;
+      toast("نهاية المقطع قبل بدايته"); return false;
+    }
+    Object.assign(ses, {
+      date: fd.get("date") || ses.date, type: fd.get("type"), grade: fd.get("grade"),
+      surah, fromAyah, toSurah, toAyah,
+      notes: fd.get("notes").trim(), assignment: fd.get("assignment").trim(), privateNote: fd.get("privateNote").trim()
+    });
+    // تاريخ أخطاء التسميع يتبع تاريخه
+    db.mistakes.forEach((m) => { if (m.sessionId === ses.id) m.date = ses.date; });
+    delete ses.draft;
+    save();
+    toast("تم حفظ التسميع");
+    if (afterSave) afterSave(); else render();
+    if (submitter && "sendAfter" in submitter.dataset) setTimeout(() => sessionSendDialog(ses.id));
+  }, (e) => {
+    if (e.target.closest("[data-edit-range]")) {
+      const box = $(".range-edit", form);
+      box.hidden = !box.hidden;
+    }
   });
-  bindMistakeRows(form, () => Number($("[name=surah]", form).value));
-  if (!ses.id) $("[name=toAyah]", form).focus();
-}
-
-function quickMistakeForm(studentId) {
-  const form = openDialog(`
-    <h2>تسجيل خطأ — ${esc(getStudent(studentId).name)}</h2>
-    <label><span>التاريخ</span><input name="date" type="date" required value="${todayStr()}"></label>
-    <div id="mistake-rows">${mistakeRowHtml({}, (studentSessions(studentId)[0] || {}).surah || 1)}</div>
-    <button type="button" class="btn sm" data-add-row>+ خطأ آخر</button>
-    ${dlgActions()}`, (fd, f) => {
-    const rows = readMistakeRows(f);
-    if (!rows) return false;
-    if (!rows.length) { toast("أدخل رقم الآية"); return false; }
-    for (const r of rows) db.mistakes.push({ id: uid(), studentId, sessionId: null, date: fd.get("date"), resolved: false, ...r });
-    save(); render(); toast("تم تسجيل الخطأ");
-  });
-  bindMistakeRows(form, () => 1);
 }
 
 // نافذة إرسال عامة: معاينة نص قابل للتعديل ثم واتساب أو SMS أو نسخ
@@ -593,12 +570,13 @@ const view = $("#view");
 
 function initials(name) { return esc((name || "؟").trim().charAt(0)); }
 
-function studentRow(st, extra = "") {
+function studentRow(st, extra = "", recite = false) {
   return `<li class="row between">
     <a class="student-link grow" href="#/student/${st.id}">
       <span class="avatar">${initials(st.name)}</span>
       <span class="grow"><b>${esc(st.name)}</b><br><span class="muted small">${extra}</span></span>
     </a>
+    ${recite ? `<a class="btn sm primary" href="${reciteHash(st.id)}">📖 تسميع</a>` : ""}
     <button class="btn sm" data-remind="${st.id}">🔔 تذكير</button>
   </li>`;
 }
@@ -611,7 +589,7 @@ function pageHome() {
   const openRepeated = db.students.map((s) => ({ s, g: groupMistakes(studentMistakes(s.id)).filter((g) => g.repeated && !g.resolved) }))
     .filter((x) => x.g.length).sort((a, b) => b.g.length - a.g.length);
   const weekAgo = todayStr(new Date(Date.now() - 7 * 864e5));
-  const unsent = db.sessions.filter((x) => x.date === todayStr() && !x.sentAt && getStudent(x.studentId));
+  const unsent = db.sessions.filter((x) => x.date === todayStr() && !x.sentAt && !x.draft && getStudent(x.studentId));
 
   return `
     <h1>${esc(db.settings.halaqaName)}</h1>
@@ -624,10 +602,10 @@ function pageHome() {
     ${db.students.length === 0 ? `<div class="card empty">ابدأ بإضافة طلاب حلقتك<br><br><button class="btn primary" data-action="add-student">+ إضافة طالب</button></div>` : ""}
     ${unsent.length ? `<h2>تقارير تسميع اليوم لم تُرسل (${unsent.length})</h2>
       <div class="card"><ul class="list">${unsent.map((x) => `<li class="row between">
-        <span class="grow"><b>${esc(getStudent(x.studentId).name)}</b><br><span class="muted small">${surahName(x.surah)} ${x.fromAyah}–${x.toAyah} · ${sessionMistakes(x).length} خطأ</span></span>
+        <span class="grow"><b>${esc(getStudent(x.studentId).name)}</b><br><span class="muted small">${rangeText(x)} · ${sessionMistakes(x).length} خطأ</span></span>
         <button class="btn sm whatsapp" data-send-session="${x.id}">📤 إرسال</button></li>`).join("")}</ul></div>` : ""}
     ${today.length ? `<h2>حلقة اليوم (${DAYS[todayDow]})</h2>
-      <div class="card"><ul class="list">${today.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`)).join("")}</ul></div>` : ""}
+      <div class="card"><ul class="list">${today.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`, true)).join("")}</ul></div>` : ""}
     ${tomorrow.length ? `<h2>حلقة الغد (${DAYS[tomorrowDow]}) — ذكّرهم الليلة</h2>
       <div class="card"><ul class="list">${tomorrow.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`)).join("")}</ul></div>` : ""}
     ${openRepeated.length ? `<h2>طلاب لديهم أخطاء متكررة</h2>
@@ -642,9 +620,9 @@ function pageStudents() {
     <div class="row between"><h1>الطلاب (${db.students.length})</h1><button class="btn primary" data-action="add-student">+ طالب</button></div>
     <input id="search" placeholder="بحث بالاسم…" value="${esc(q)}" style="margin-bottom:12px">
     <div class="card">${list.length ? `<ul class="list">${list.map((s) => {
-      const last = studentSessions(s.id)[0];
+      const last = finishedSessions(s.id)[0];
       const rep = groupMistakes(studentMistakes(s.id)).filter((g) => g.repeated && !g.resolved).length;
-      const info = [last ? `آخر تسميع: ${surahName(last.surah)} ${last.fromAyah}-${last.toAyah}` : "لا يوجد تسميع بعد",
+      const info = [last ? `آخر تسميع: ${rangeText(last)}` : "لا يوجد تسميع بعد",
         rep ? `<span class="badge danger">${rep} متكرر</span>` : ""].filter(Boolean).join(" · ");
       return studentRow(s, info);
     }).join("")}</ul>` : `<p class="empty">لا يوجد طلاب</p>`}</div>`;
@@ -654,34 +632,42 @@ function pageStudent(id, tab) {
   const st = getStudent(id);
   if (!st) return `<p class="empty">الطالب غير موجود</p>`;
   tab = tab || "log";
-  const sessions = studentSessions(id);
+  const sessions = finishedSessions(id);
+  const draft = draftSession(id);
   const groups = groupMistakes(studentMistakes(id));
   const repeated = groups.filter((g) => g.repeated && !g.resolved);
   const appt = nextAppointment(st);
 
   let body = "";
   if (tab === "log") {
-    body = sessions.length ? sessions.map((s) => {
+    body = (draft ? `<div class="card draft-card">
+        <div class="row between"><b>⏳ تسميع لم يُنهَ بعد</b><span class="badge danger">${sessionMistakes(draft).length} خطأ</span></div>
+        <div class="muted small">${fmtDate(draft.date)} · بدأ من ${surahName(draft.surah)} ${draft.fromAyah}</div>
+        <div class="row" style="margin-top:8px">
+          <a class="btn sm primary" href="${reciteHash(id)}">متابعة في المصحف</a>
+          <button class="btn sm danger" data-del-session="${draft.id}">حذف</button>
+        </div></div>` : "") +
+    (sessions.length ? sessions.map((s) => {
       const ms = sessionMistakes(s);
       const gradeCls = s.grade === "يُعاد" ? "danger" : s.grade === "مقبول" ? "warn" : "ok";
       return `<div class="card">
         <div class="row between">
-          <b>${SESSION_TYPES[s.type] || ""}: ${surahName(s.surah)} ${s.fromAyah}–${s.toAyah}</b>
+          <b>${SESSION_TYPES[s.type] || ""}: ${rangeText(s)}</b>
           <span class="badge ${gradeCls}">${esc(s.grade)}</span>
         </div>
         <div class="muted small">${fmtDate(s.date)}${s.sentAt ? ` · <span class="badge ok">أُرسل للطالب ✓</span>` : ""}</div>
-        ${ms.length ? `<div class="small" style="margin-top:6px">الأخطاء (${ms.length}): ${ms.map((m) => `<span class="badge warn">${m.ayah}${m.word ? ": " + esc(m.word) : ""}</span>`).join(" ")}</div>` : `<div class="small" style="margin-top:6px"><span class="badge ok">بلا أخطاء</span></div>`}
+        ${ms.length ? `<div class="small" style="margin-top:6px">الأخطاء (${ms.length}): ${ms.map((m) => `<span class="badge warn">${m.ayah}${m.word ? `: <span class="qw">${esc(m.word)}</span>` : " كاملة"}</span>`).join(" ")}</div>` : `<div class="small" style="margin-top:6px"><span class="badge ok">بلا أخطاء</span></div>`}
         ${s.assignment ? `<div class="small" style="margin-top:6px">📝 الواجب: ${esc(s.assignment)}</div>` : ""}
         ${s.notes ? `<div class="small" style="margin-top:4px">💬 ملاحظات الشيخ: ${esc(s.notes)}</div>` : ""}
         ${s.privateNote ? `<div class="small muted" style="margin-top:4px">🔒 ${esc(s.privateNote)}</div>` : ""}
         <div class="row" style="margin-top:8px">
           <button class="btn sm whatsapp" data-send-session="${s.id}">📤 ${s.sentAt ? "إعادة إرسال" : "إرسال للطالب"}</button>
-          <a class="btn sm" href="${mushafHash(`${s.surah}-${s.fromAyah}`, id, s.id)}">📖 المصحف</a>
+          <a class="btn sm" href="${mushafHash(`${s.surah}-${s.fromAyah}`, id, s.id)}">📖 أخطاؤه في المصحف</a>
           <button class="btn sm" data-edit-session="${s.id}">تعديل</button>
           <button class="btn sm danger" data-del-session="${s.id}">حذف</button>
         </div>
       </div>`;
-    }).join("") : `<div class="card empty">لا يوجد تسميع مسجّل بعد</div>`;
+    }).join("") : draft ? "" : `<div class="card empty">لا يوجد تسميع مسجّل بعد. اضغط «📖 تسميع جديد» وسجّل الأخطاء بالضغط على الكلمات.</div>`);
   } else if (tab === "mistakes") {
     const filter = pageStudent.filter || "open";
     const shown = groups.filter((g) => filter === "all" || (filter === "repeated" ? g.repeated && !g.resolved : !g.resolved));
@@ -691,7 +677,7 @@ function pageStudent(id, tab) {
           ${[["open", "غير المتقنة"], ["repeated", "المتكررة"], ["all", "الكل"]].map(([k, v]) => `<button data-mfilter="${k}" class="${filter === k ? "active" : ""}">${v}</button>`).join("")}
         </div>
         <span class="grow"></span>
-        <button class="btn sm primary" data-action="quick-mistake">+ خطأ</button>
+        <a class="btn sm primary" href="${reciteHash(id)}">📖 تسجيل من المصحف</a>
       </div>
       ${shown.length ? shown.map(mistakeGroupCard).join("") : `<div class="card empty">لا توجد أخطاء هنا</div>`}`;
   } else if (tab === "notes") {
@@ -736,8 +722,7 @@ function pageStudent(id, tab) {
         <div class="stat"><b>${repeated.length}</b><span>خطأ متكرر</span></div>
       </div>
       <div class="row" style="margin-top:12px">
-        <button class="btn primary grow" data-action="new-session">+ تسميع جديد</button>
-        <a class="btn grow" href="${mushafHash(sessions[0] ? `${sessions[0].surah}-${sessions[0].fromAyah}` : 1, id)}">📖 المصحف</a>
+        <a class="btn primary grow" href="${reciteHash(id)}">📖 ${draft ? "متابعة التسميع" : "تسميع جديد"}</a>
         <button class="btn grow" data-remind="${st.id}">🔔 تذكير</button>
       </div>
     </div>
@@ -755,7 +740,7 @@ function mistakeGroupCard(g, showStudent) {
     <div class="row between">
       <div class="grow">
         ${st ? `<a href="#/student/${st.id}/mistakes" class="small">${esc(st.name)}</a><br>` : ""}
-        <span class="word">${esc(g.word) || "—"}</span>
+        <span class="word qw">${esc(g.word) || "الآية كاملة"}</span>
         <span class="muted"> · ${surahName(g.surah)} آية ${g.ayah}</span>
       </div>
       ${g.resolved ? `<span class="badge ok">أُتقن ✓</span>` : g.count > 1 ? `<span class="badge danger">تكرر ×${g.count}</span>` : `<span class="badge warn">مرة واحدة</span>`}
@@ -862,28 +847,54 @@ function loadQuran() {
   return quranLoading;
 }
 const quranReady = () => typeof QURAN_TEXT !== "undefined";
+// النص المصدر بترميز خط مجمع الملك فهد للتنوين المتتابع؛ يُحوَّل عند العرض إلى رموز يونيكود القياسية التي يدعمها خط المصحف
+const OPEN_TANWEEN = { "\u0657": "\u08F0", "\u065E": "\u08F1", "\u0656": "\u08F2" };
+const ayahText = (s, a) => ((QURAN_TEXT[s - 1] || [])[a - 1] || "").replace(/[\u0656\u0657\u065E]/g, (c) => OPEN_TANWEEN[c]);
 
 function mushafHash(page, sid, ses) {
   return `#/mushaf/${page}/${sid || "-"}/${ses || "-"}`;
 }
 
 // حالة كل كلمة في الصفحة لطالب معيّن: "s:a:i" للكلمات، و"s:a" للآية كاملة
-function mushafMarks(sid) {
+function mushafMarks(sid, sesId) {
   const marks = new Map();
   if (!sid) return marks;
+  const add = (k, cls) => marks.set(k, ((marks.get(k) || "") + " " + cls).trim());
   for (const g of groupMistakes(studentMistakes(sid))) {
     const cls = g.resolved ? "m-ok" : g.repeated ? "m-rep" : "m-once";
-    const words = quranReady() && QURAN_TEXT[g.surah - 1] ? (QURAN_TEXT[g.surah - 1][g.ayah - 1] || "").split(" ") : [];
+    const words = quranReady() ? ayahText(g.surah, g.ayah).split(" ") : [];
     const target = normalizeWord(g.word);
     for (const m of g.items) {
-      if (Number.isInteger(m.wordIndex)) marks.set(`${m.surah}:${m.ayah}:${m.wordIndex}`, cls);
-      else if (!target) marks.set(`${m.surah}:${m.ayah}`, cls);
+      const c = sesId && m.sessionId === sesId ? `${cls} m-now` : cls;
+      if (Number.isInteger(m.wordIndex)) add(`${m.surah}:${m.ayah}:${m.wordIndex}`, c);
+      else if (!target) add(`${m.surah}:${m.ayah}`, c);
       // أخطاء مكتوبة يدوياً بلا رقم كلمة: تُطابق بالكلمة نفسها داخل الآية
-      else words.forEach((w, i) => { if (normalizeWord(w) === target) marks.set(`${m.surah}:${m.ayah}:${i}`, cls); });
+      else words.forEach((w, i) => { if (normalizeWord(w) === target) add(`${m.surah}:${m.ayah}:${i}`, c); });
     }
   }
+  for (const [k, v] of marks) marks.set(k, [...new Set(v.split(" "))].join(" "));
   return marks;
 }
+
+// نوع الخطأ الذي يُسجَّل عند الضغط على الكلمة (يختاره الشيخ من شريط المصحف)
+let mushafKind = MISTAKE_KINDS[0];
+try { if (MISTAKE_KINDS.includes(localStorage.getItem("halaqa-kind"))) mushafKind = localStorage.getItem("halaqa-kind"); } catch {}
+// موضع بداية التسميع عند فتحه من «تسميع جديد»
+let mushafStart = null;
+
+// أين يبدأ التسميع الجديد: بعد نهاية آخر تسميع
+function nextStart(sid) {
+  const last = finishedSessions(sid)[0];
+  if (!last) return [1, 1];
+  return fromGlobal(Math.min(6236, toGlobal(...sesEnd(last)) + 1));
+}
+function reciteHash(sid) {
+  const d = draftSession(sid);
+  if (d) return mushafHash(d.lastPage || `${d.surah}-${d.fromAyah}`, sid, d.id);
+  const [s, a] = nextStart(sid);
+  return mushafHash(`${s}-${a}`, sid);
+}
+const pageRange = (page) => [MUSHAF_PAGES[page - 1], page < 604 ? MUSHAF_PAGES[page] - 1 : 6236];
 
 function pageMushaf(pageArg, sidArg, sesArg) {
   if (!quranReady()) {
@@ -894,19 +905,26 @@ function pageMushaf(pageArg, sidArg, sesArg) {
   if (!pageArg) {
     let last = {};
     try { last = JSON.parse(localStorage.getItem("halaqa-mushaf-last") || "{}"); } catch {}
-    location.replace(mushafHash(last.page || 1, getStudent(last.sid) ? last.sid : ""));
+    const sid = getStudent(last.sid) ? last.sid : "";
+    location.replace(sid ? reciteHash(sid) : mushafHash(last.page || 1, ""));
     return "";
   }
   const ref = /^(\d+)-(\d+)$/.exec(pageArg || "");
-  const page = ref ? pageOf(Math.min(114, Number(ref[1])) || 1, Number(ref[2]) || 1) : Math.min(604, Math.max(1, Number(pageArg) || 1));
   const sid = getStudent(sidArg) ? sidArg : "";
-  const ses = sesArg && db.sessions.find((s) => s.id === sesArg && s.studentId === sid);
-  const first = MUSHAF_PAGES[page - 1], last = page < 604 ? MUSHAF_PAGES[page] - 1 : 6236;
+  if (ref) {
+    const rs = Math.min(114, Math.max(1, Number(ref[1]))), ra = Math.min(surahAyahs(rs), Math.max(1, Number(ref[2])));
+    mushafStart = { sid, s: rs, a: ra };
+  }
+  const page = ref ? pageOf(mushafStart.s, mushafStart.a) : Math.min(604, Math.max(1, Number(pageArg) || 1));
+  const ses = sesArg && db.sessions.find((x) => x.id === sesArg && x.studentId === sid);
+  if (ses && ses.draft && ses.lastPage !== page) { ses.lastPage = page; save(); }
+  const [first, last] = pageRange(page);
   const [s0, a0] = fromGlobal(first);
   try { localStorage.setItem("halaqa-mushaf-last", JSON.stringify({ page, sid })); } catch {}
-  const marks = mushafMarks(sid);
-  const basmala = QURAN_TEXT[0][0];
-  const inRange = (s, a) => ses && s === ses.surah && a >= ses.fromAyah && a <= ses.toAyah;
+  const marks = mushafMarks(sid, ses && ses.id);
+  const basmala = ayahText(1, 1);
+  const rs = ses ? toGlobal(ses.surah, ses.fromAyah) : 0, re = ses && !ses.draft ? toGlobal(...sesEnd(ses)) : 0;
+  const inRange = (g) => ses && (ses.draft ? g >= rs : g >= rs && g <= re);
 
   let html = "";
   for (let g = first; g <= last; g++) {
@@ -915,87 +933,182 @@ function pageMushaf(pageArg, sidArg, sesArg) {
       html += `<div class="surah-head">سورة ${surahName(s)}</div>`;
       if (s !== 1 && s !== 9) html += `<div class="basmala">${basmala}</div>`;
     }
-    const words = QURAN_TEXT[s - 1][a - 1].split(" ");
-    html += `<span class="ayah ${inRange(s, a) ? "in-range" : ""}">` +
+    const words = ayahText(s, a).split(" ");
+    html += `<span class="ayah ${inRange(g) ? "in-range" : ""}">` +
       words.map((w, i) => `<span class="w ${marks.get(`${s}:${a}:${i}`) || ""}" data-s="${s}" data-a="${a}" data-i="${i}">${w}</span>`).join(" ") +
-      ` <span class="ayah-no ${marks.get(`${s}:${a}`) || ""}" data-s="${s}" data-a="${a}" title="الآية كاملة">﴿${toArabicDigits(a)}﴾</span></span> `;
+      ` <span class="ayah-no ${marks.get(`${s}:${a}`) || ""}" data-s="${s}" data-a="${a}" title="خطأ في الآية كاملة">﴿${toArabicDigits(a)}﴾</span></span> `;
   }
 
-  const open = sid ? groupMistakes(studentMistakes(sid)).filter((x) => !x.resolved) : [];
+  const st = sid && getStudent(sid);
+  const count = ses ? sessionMistakes(ses).length : 0;
+  const recBar = st ? `
+    <div class="rec-bar">
+      <div class="row between">
+        <div class="grow" style="min-width:0">
+          <b>🎙️ ${esc(st.name)}</b>
+          <div class="small muted">${ses && !ses.draft ? `تعديل أخطاء تسميع ${fmtDate(ses.date)}` : ses ? `تسميع جارٍ · بدأ من ${surahName(ses.surah)} ${ses.fromAyah}` : "اضغط على الكلمة عند خطأ الطالب"}</div>
+        </div>
+        <span class="badge ${count ? "danger" : "ok"} rec-count">${count} خطأ</span>
+        <button class="btn sm primary" data-action="finish-session">${ses && !ses.draft ? "تم ✓" : "إنهاء ✓"}</button>
+      </div>
+      <div class="kind-chips" role="radiogroup" aria-label="نوع الخطأ">
+        ${MISTAKE_KINDS.map((k) => `<button class="kchip ${k === mushafKind ? "on" : ""}" data-set-kind="${k}" role="radio" aria-checked="${k === mushafKind}">${k}</button>`).join("")}
+      </div>
+    </div>` : "";
+
   return `
+    ${recBar}
+    <div class="row between mushaf-nav">
+      <button class="btn sm" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>→ السابقة</button>
+      <span class="small">الجزء ${juzOf(s0, a0)} · صفحة <input id="mushaf-page" type="number" min="1" max="604" value="${page}" aria-label="رقم الصفحة"></span>
+      <button class="btn sm" data-page="${page + 1}" ${page >= 604 ? "disabled" : ""}>التالية ←</button>
+    </div>
+    ${st && riwayaOf(st) !== DEFAULT_RIWAYA ? `<p class="small warn-note">🎙️ الطالب يقرأ برواية <b>${esc(riwayaOf(st))}</b>، والنص المعروض برواية حفص عن عاصم؛ فانتبه لفروق الكلمات وعدّ الآي.</p>` : ""}
+    <div class="mushaf-page ${sid ? "" : "no-student"}">${html}</div>
+    <p class="small muted legend">
+      ${sid ? `ضغطة على الكلمة تسجّل الخطأ، وضغطة ثانية تلغيه. ضغطة على رقم الآية لخطأ في الآية كاملة، وضغطة مطوّلة على الكلمة لتفاصيلها وسجلها.`
+        : `اختر الطالب لتبدأ تسجيل أخطائه بالضغط على الكلمات.`}<br>
+      <span class="w m-now">خطأ في هذا التسميع</span> <span class="w m-once">خطأ سابق</span> <span class="w m-rep">متكرر</span> <span class="w m-ok">أُتقن</span>
+    </p>
     <div class="card mushaf-bar">
       <div class="grid2">
         <label style="margin:0"><span>الطالب</span>
           <select id="mushaf-student"><option value="">— اختر الطالب —</option>
-            ${db.students.slice().sort((x, y) => x.name.localeCompare(y.name, "ar")).map((st) => `<option value="${st.id}" ${st.id === sid ? "selected" : ""}>${esc(st.name)}</option>`).join("")}
+            ${db.students.slice().sort((x, y) => x.name.localeCompare(y.name, "ar")).map((x) => `<option value="${x.id}" ${x.id === sid ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
           </select></label>
-        <label style="margin:0"><span>السورة</span><select id="mushaf-surah">${surahOptions(s0)}</select></label>
+        <label style="margin:0"><span>الانتقال إلى سورة</span><select id="mushaf-surah">${surahOptions(s0)}</select></label>
       </div>
-      ${sid && riwayaOf(getStudent(sid)) !== DEFAULT_RIWAYA ? `<p class="small warn-note">🎙️ الطالب يقرأ برواية <b>${esc(riwayaOf(getStudent(sid)))}</b>، والنص المعروض برواية حفص عن عاصم؛ فانتبه لفروق الكلمات وعدّ الآي بين الروايتين.</p>` : ""}
-      ${ses ? `<p class="small" style="margin:8px 0 0">تسميع ${fmtDate(ses.date)}: ${surahName(ses.surah)} ${ses.fromAyah}–${ses.toAyah} — الأخطاء تُضاف إلى هذا التسميع</p>` : ""}
     </div>
-    <div class="row between mushaf-nav">
-      <button class="btn sm" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>→ السابقة</button>
-      <span class="small">الجزء ${juzOf(s0, a0)} · صفحة <input id="mushaf-page" type="number" min="1" max="604" value="${page}"></span>
-      <button class="btn sm" data-page="${page + 1}" ${page >= 604 ? "disabled" : ""}>التالية ←</button>
-    </div>
-    <div class="mushaf-page ${sid ? "" : "no-student"}">${html}</div>
-    <p class="small muted legend">
-      ${sid ? `اضغط على الكلمة لتسجيل خطأ، أو على رقم الآية لخطأ في الآية كاملة.` : `اختر الطالب أولاً لتسجيل أخطائه على المصحف.`}<br>
-      <span class="w m-once">خطأ مرة</span> <span class="w m-rep">متكرر</span> <span class="w m-ok">أُتقن</span>
-      ${sid ? ` · لدى الطالب ${open.length} موضع غير متقن` : ""}
-    </p>
     <p class="small muted">نص المصحف: موسوعة القرآن الكريم (QuranEnc)، وترقيم الصفحات وفق مصحف المدينة.</p>`;
 }
 
+// يعيد التسميع الذي تُسجَّل فيه الأخطاء، وينشئ تسميعاً جارياً عند أول خطأ
+function ensureSession(sid, sesId, page) {
+  let ses = sesId && db.sessions.find((x) => x.id === sesId && x.studentId === sid);
+  if (ses) return ses;
+  ses = draftSession(sid);
+  if (ses) return ses;
+  const [first, last] = pageRange(page);
+  const startG = mushafStart && mushafStart.sid === sid ? toGlobal(mushafStart.s, mushafStart.a) : 0;
+  const [s, a] = fromGlobal(startG >= first && startG <= last ? startG : first);
+  const prev = finishedSessions(sid)[0];
+  ses = { id: uid(), studentId: sid, createdAt: Date.now(), date: todayStr(), type: prev ? prev.type : "hifz",
+    surah: s, fromAyah: a, lastPage: page, draft: true };
+  db.sessions.push(ses);
+  return ses;
+}
+
+// ضغطة على كلمة: تسجيل الخطأ فوراً، أو إلغاؤه إن كان مسجلاً في هذا التسميع
+function mushafTap(el) {
+  const r = parseRoute();
+  const sid = r.tab;
+  if (!getStudent(sid)) return toast("اختر الطالب أولاً من أسفل الصفحة");
+  const page = Number($("#mushaf-page").value);
+  const s = Number(el.dataset.s), a = Number(el.dataset.a);
+  const i = el.classList.contains("ayah-no") ? null : Number(el.dataset.i);
+  const ses = ensureSession(sid, r.extra !== "-" ? r.extra : "", page);
+  const word = i === null ? "" : ayahText(s, a).split(" ")[i];
+  const same = (m) => m.sessionId === ses.id && m.surah === s && m.ayah === a &&
+    (i === null ? !Number.isInteger(m.wordIndex) && !m.word : m.wordIndex === i);
+  const existing = db.mistakes.find(same);
+  if (existing) {
+    db.mistakes = db.mistakes.filter((m) => m !== existing);
+    toast(`أُلغي الخطأ${word ? `: «${word}»` : ""}`);
+  } else {
+    const m = { id: uid(), studentId: sid, sessionId: ses.id, date: ses.date, surah: s, ayah: a, word,
+      wordIndex: i === null ? undefined : i, kind: mushafKind, note: "", resolved: false };
+    db.mistakes.push(m);
+    // خطأ جديد في موضع سبق إتقانه يعيد فتحه
+    const key = mistakeKey(m);
+    const past = studentMistakes(sid).filter((x) => mistakeKey(x) === key);
+    past.forEach((x) => (x.resolved = false));
+    toast(`✓ ${mushafKind}${word ? `: «${word}»` : ` — الآية ${a} كاملة`}${past.length > 1 ? ` ⚠️ تكرر ${timesAr(past.length)}` : ""}`);
+    if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+  }
+  save();
+  // تحديث العنوان دون إطلاق hashchange حتى لا تقفز الصفحة إلى الأعلى
+  const target = mushafHash(page, sid, ses.id);
+  if (location.hash !== target) history.replaceState(null, "", target);
+  render();
+}
+
+// ضغطة مطوّلة: تفاصيل الموضع وسجله وتغيير نوع الخطأ
 function mushafWordDialog(sid, sesId, s, a, i) {
   const st = getStudent(sid);
-  const ses = sesId && db.sessions.find((x) => x.id === sesId);
-  const words = QURAN_TEXT[s - 1][a - 1].split(" ");
+  const words = ayahText(s, a).split(" ");
   const whole = i === null;
   const word = whole ? "" : words[i];
   const key = mistakeKey({ surah: s, ayah: a, word });
   const history = studentMistakes(sid).filter((m) => mistakeKey(m) === key).sort((x, y) => y.date.localeCompare(x.date));
+  const current = sesId && history.find((m) => m.sessionId === sesId && (whole || m.wordIndex === i));
   const resolved = history.length && history.every((m) => m.resolved);
 
   const form = openDialog(`
     <h2 class="row between"><span>${esc(st.name)}</span><span class="badge">${surahName(s)} · آية ${a}</span></h2>
-    <div class="dlg-word">${whole ? `<span class="small muted">الآية كاملة</span><br>${QURAN_TEXT[s - 1][a - 1]}` : word}</div>
+    <div class="dlg-word">${whole ? `<span class="small muted">الآية كاملة</span><br>${ayahText(s, a)}` : word}</div>
+    ${current ? `
+      <p class="field-label">نوع الخطأ في هذا التسميع</p>
+      <div class="kind-grid">${MISTAKE_KINDS.map((k) => `<button type="button" class="btn ${k === current.kind ? "primary" : ""}" data-kind="${k}">${k}</button>`).join("")}</div>
+      <label style="margin-top:10px"><span>ملاحظة على هذا الخطأ (اختياري)</span><input name="note" value="${esc(current.note || "")}" placeholder="مثال: قرأها بالفتح"></label>
+      <button type="button" class="btn sm danger" data-del-id="${current.id}">إلغاء هذا الخطأ</button>`
+    : `<p class="small muted">لا يوجد خطأ مسجل هنا في هذا التسميع. اضغط على الكلمة ضغطة عادية لتسجيله.</p>`}
     ${history.length ? `<div class="card" style="margin:10px 0">
         <div class="row between"><b>سجل هذا الموضع</b>
           ${history.length > 1 ? `<span class="badge danger">تكرر ${timesAr(history.length)}</span>` : ""}
           ${resolved ? `<span class="badge ok">أُتقن ✓</span>` : ""}</div>
-        <ul class="list small">${history.map((m) => `<li class="row between"><span>${fmtDate(m.date)} — ${esc(m.kind)}${m.note ? ` (${esc(m.note)})` : ""}</span>
-          <button type="button" class="btn sm danger" data-del-id="${m.id}">حذف</button></li>`).join("")}</ul>
+        <ul class="list small">${history.map((m) => `<li>${fmtDate(m.date)} — ${esc(m.kind)}${m.note ? ` (${esc(m.note)})` : ""}</li>`).join("")}</ul>
         <button type="button" class="btn sm" data-toggle-resolve>${resolved ? "إعادة فتح" : "تم الإتقان ✓"}</button>
       </div>` : ""}
-    <label><span>التاريخ</span><input name="date" type="date" value="${ses ? ses.date : todayStr()}"></label>
-    <label><span>ملاحظة (اختياري)</span><input name="note" placeholder="مثال: قرأها بالفتح"></label>
-    <p class="small muted" style="margin:0 0 6px">اختر نوع الخطأ ليُسجَّل مباشرة:</p>
-    <div class="kind-grid">${MISTAKE_KINDS.map((k) => `<button type="button" class="btn" data-kind="${k}">${k}</button>`).join("")}</div>
-    <div class="dlg-actions"><button type="button" class="btn" data-close>إغلاق</button></div>`, () => false, (e) => {
+    <div class="dlg-actions"><button class="btn primary">تم</button></div>`, () => {
+    if (current) { current.note = $("[name=note]", form).value.trim(); save(); render(); }
+  }, (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    if (b.dataset.kind) {
-      db.mistakes.push({
-        id: uid(), studentId: sid, sessionId: ses ? ses.id : null,
-        date: $("[name=date]", form).value || todayStr(), surah: s, ayah: a, word, wordIndex: whole ? undefined : i,
-        kind: b.dataset.kind, note: $("[name=note]", form).value.trim(), resolved: false
-      });
-      // خطأ جديد في موضع سبق إتقانه يعيد فتحه
-      history.forEach((m) => (m.resolved = false));
-      save(); dlg.close(); render();
-      const n = history.length + 1;
-      toast(`سُجّل: ${b.dataset.kind}${n > 1 ? ` — تكرر ${timesAr(n)}` : ""}`);
+    if (b.dataset.kind && current) {
+      current.kind = b.dataset.kind;
+      $$("[data-kind]", form).forEach((x) => x.classList.toggle("primary", x === b));
+      save();
     } else if (b.dataset.delId) {
       db.mistakes = db.mistakes.filter((m) => m.id !== b.dataset.delId);
-      save(); dlg.close(); render(); toast("تم الحذف");
+      save(); dlg.close(); render(); toast("أُلغي الخطأ");
     } else if ("toggleResolve" in b.dataset) {
       history.forEach((m) => (m.resolved = !resolved));
       save(); dlg.close(); render(); toast(resolved ? "أُعيد فتح الخطأ" : "أحسنت! تم تعليمه كمُتقَن");
     }
   });
 }
+
+// الضغط المطوّل على الكلمة (للجوال) أو الزر الأيمن (للحاسوب)
+let longPressTimer = null, longPressFired = false, pressStart = null;
+view.addEventListener("pointerdown", (e) => {
+  const el = e.target.closest(".mushaf-page .w, .mushaf-page .ayah-no");
+  longPressFired = false;
+  if (!el) return;
+  pressStart = [e.clientX, e.clientY];
+  clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    const r = parseRoute();
+    if (!getStudent(r.tab)) return;
+    longPressFired = true;
+    mushafWordDialog(r.tab, r.extra !== "-" ? r.extra : "", Number(el.dataset.s), Number(el.dataset.a),
+      el.classList.contains("ayah-no") ? null : Number(el.dataset.i));
+  }, 550);
+});
+view.addEventListener("pointermove", (e) => {
+  if (pressStart && Math.hypot(e.clientX - pressStart[0], e.clientY - pressStart[1]) > 10) clearTimeout(longPressTimer);
+});
+["pointerup", "pointercancel"].forEach((t) => view.addEventListener(t, () => clearTimeout(longPressTimer)));
+view.addEventListener("contextmenu", (e) => {
+  const el = e.target.closest(".mushaf-page .w, .mushaf-page .ayah-no");
+  if (!el) return;
+  e.preventDefault();
+  clearTimeout(longPressTimer);
+  if (longPressFired) return;
+  longPressFired = true;
+  const r = parseRoute();
+  if (getStudent(r.tab)) mushafWordDialog(r.tab, r.extra !== "-" ? r.extra : "", Number(el.dataset.s), Number(el.dataset.a),
+    el.classList.contains("ayah-no") ? null : Number(el.dataset.i));
+});
 
 /* ============ التوجيه والأحداث ============ */
 function parseRoute() {
@@ -1017,10 +1130,8 @@ function render() {
 view.addEventListener("click", (e) => {
   const word = e.target.closest(".mushaf-page .w, .mushaf-page .ayah-no");
   if (word) {
-    const r = parseRoute();
-    if (!getStudent(r.tab)) return toast("اختر الطالب أولاً من أعلى الصفحة");
-    const i = word.classList.contains("ayah-no") ? null : Number(word.dataset.i);
-    return mushafWordDialog(r.tab, r.extra !== "-" ? r.extra : "", Number(word.dataset.s), Number(word.dataset.a), i);
+    if (longPressFired) { longPressFired = false; return; }
+    return mushafTap(word);
   }
   const t = e.target.closest("button, [data-action]");
   if (!t) return;
@@ -1041,7 +1152,13 @@ view.addEventListener("click", (e) => {
   if (d.page) { location.hash = mushafHash(d.page, r.tab !== "-" ? r.tab : "", r.extra !== "-" ? r.extra : ""); return; }
   if (d.tab) { location.hash = `#/student/${r.id}/${d.tab}`; return; }
   if (d.mfilter) { pageStudent.filter = d.mfilter; return render(); }
-  if (d.editSession) return sessionForm(r.id, db.sessions.find((s) => s.id === d.editSession));
+  if (d.editSession) return finishSheet(db.sessions.find((s) => s.id === d.editSession));
+  if (d.setKind) {
+    mushafKind = d.setKind;
+    try { localStorage.setItem("halaqa-kind", mushafKind); } catch {}
+    $$("[data-set-kind]").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-checked", b === t); });
+    return;
+  }
   if (d.delSession) {
     return confirmDialog("حذف هذا التسميع وأخطائه؟", () => {
       db.sessions = db.sessions.filter((s) => s.id !== d.delSession);
@@ -1073,8 +1190,19 @@ view.addEventListener("click", (e) => {
         db.notes = db.notes.filter((n) => n.studentId !== st.id);
         save(); location.hash = "#/students";
       });
-    case "new-session": return sessionForm(r.id);
-    case "quick-mistake": return quickMistakeForm(r.id);
+    case "finish-session": {
+      const sid = r.tab;
+      const page = Number($("#mushaf-page").value);
+      const ses = ensureSession(sid, r.extra !== "-" ? r.extra : "", page);
+      if (ses.draft) {
+        // نهاية المقطع المقترحة: آخر آية في الصفحة الحالية، أو آخر خطأ إن كان أبعد
+        const lastG = Math.max(pageRange(page)[1], ...sessionMistakes(ses).map((m) => toGlobal(m.surah, m.ayah)));
+        const [ts, ta] = fromGlobal(Math.max(lastG, toGlobal(ses.surah, ses.fromAyah)));
+        ses.toSurah = ts; ses.toAyah = ta;
+      }
+      save();
+      return finishSheet(ses, { afterSave: () => { location.hash = `#/student/${sid}`; } });
+    }
     case "add-note": return noteForm(r.id);
     case "reset-session-template":
       $("[name=sessionTemplate]").value = DEFAULT_SESSION_TEMPLATE; return;
