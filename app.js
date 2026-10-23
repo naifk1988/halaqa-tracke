@@ -1158,6 +1158,7 @@ function afterMushafRender() {
     refreshMushafMarks();
     fitLines();
     if (document.fonts) document.fonts.load(live ? `20px qpc${p}` : '20px "Amiri Quran"').then(fitLines).catch(() => {});
+    setTimeout(fitLines, 250);
     slideIn();
     if (live) prefetchLive(p);
   };
@@ -1230,7 +1231,23 @@ function fitLines() {
   if (hMax > 10) nf = Math.min(nf, hMax);
   nf = Math.max(13, Math.min(44, nf));
   if (Math.abs(nf - fs) > 0.3) box.style.fontSize = nf.toFixed(2) + "px";
+  // تحقق فعلي: إن خرج أي سطر عن حدود الصفحة لأي سبب يُصغَّر الخط حتى يتسع
+  for (let k = 0; k < 6; k++) {
+    const boxRect = box.getBoundingClientRect();
+    let worst = 1;
+    $$(".line:not(.shead)", box).forEach((l) => {
+      if (!l.children.length) return;
+      let lo = Infinity, hi = -Infinity;
+      for (const c of l.children) { const r = c.getBoundingClientRect(); lo = Math.min(lo, r.left); hi = Math.max(hi, r.right); }
+      worst = Math.max(worst, (hi - lo) / boxRect.width, (boxRect.left - lo > 0.5 || hi - boxRect.right > 0.5) ? 1.02 : 1);
+    });
+    if (worst <= 1.001) break;
+    nf = Math.max(12, nf / worst * 0.99);
+    box.style.fontSize = nf.toFixed(2) + "px";
+  }
 }
+// أعد الملاءمة بعد اكتمال تحميل الخطوط وتغيّر حجم الشاشة الفعلي (دوران الجوال أو ظهور شريط العنوان)
+if (window.visualViewport) visualViewport.addEventListener("resize", () => { if (mushafView) fitLines(); });
 window.addEventListener("resize", () => { if (mushafView) fitLines(); });
 
 // حركة دخول الصفحة الجديدة من جهة الانتقال
