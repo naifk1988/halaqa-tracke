@@ -28,6 +28,20 @@
   --backdrop: rgba(0, 0, 0, .45);
   --wa: #25d366;
   --wa-fg: #063d1f;
+  --m-paper: #ffffff;
+  --m-edge: #f4f1ea;
+  --m-ink: #111111;
+  --m-soft: #5d5442;
+  --m-frame: #14463f;
+  --m-on-frame: #f6efd9;
+  --m-cart: #7fae96;
+  --m-cart-bg: #eef6f0;
+  --m-line: #e3d8bb;
+  --m-hl: rgba(31, 107, 96, .13);
+  --m-now: #c0392b;
+  --m-now-bg: rgba(192, 57, 43, .14);
+  --m-once: #b45309;
+  --m-ok: #15803d;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -59,6 +73,20 @@
     --backdrop: rgba(0, 0, 0, .6);
     --wa: #25d366;
     --wa-fg: #063d1f;
+    --m-paper: #141412;
+    --m-edge: #1d1c19;
+    --m-ink: #ece6d6;
+    --m-soft: #b5aa90;
+    --m-frame: #1f5a51;
+    --m-on-frame: #f6efd9;
+    --m-cart: #4f7d68;
+    --m-cart-bg: #1b2621;
+    --m-line: #3a3528;
+    --m-hl: rgba(108, 194, 177, .16);
+    --m-now: #ff7a6b;
+    --m-now-bg: rgba(255, 122, 107, .18);
+    --m-once: #fbbf24;
+    --m-ok: #4ade80;
     color-scheme: dark;
   }
 }
@@ -90,6 +118,20 @@
     --backdrop: rgba(0, 0, 0, .6);
     --wa: #25d366;
     --wa-fg: #063d1f;
+    --m-paper: #141412;
+    --m-edge: #1d1c19;
+    --m-ink: #ece6d6;
+    --m-soft: #b5aa90;
+    --m-frame: #1f5a51;
+    --m-on-frame: #f6efd9;
+    --m-cart: #4f7d68;
+    --m-cart-bg: #1b2621;
+    --m-line: #3a3528;
+    --m-hl: rgba(108, 194, 177, .16);
+    --m-now: #ff7a6b;
+    --m-now-bg: rgba(255, 122, 107, .18);
+    --m-once: #fbbf24;
+    --m-ok: #4ade80;
     color-scheme: dark;
 }
 
@@ -237,61 +279,13 @@ dialog::backdrop { background: var(--backdrop); }
   src: url("fonts/amiri-quran.woff2") format("woff2");
   font-display: swap;
 }
-.mushaf-nav { margin: 10px 0; }
-.mushaf-nav input { width: 70px; min-height: 32px; padding: 2px 6px; text-align: center; display: inline-block; }
-.mushaf-page {
-  font-family: "Amiri Quran", "KFGQPC Uthmanic Script HAFS", "Noto Naskh Arabic", serif;
-  font-size: 1.6rem; line-height: 2.5; text-align: justify;
-  background: var(--paper); color: var(--paper-fg);
-  border: 1px solid var(--paper-line); border-radius: var(--radius);
-  padding: 14px 16px; box-shadow: inset 0 0 0 4px var(--paper-inset);
-}
-.mushaf-page .w { cursor: pointer; border-radius: 6px; padding: 0 1px; transition: background .15s; }
-.mushaf-page .w:hover { background: var(--primary-soft); }
-.mushaf-page.no-student .w { cursor: default; }
-.mushaf-page.no-student .w:hover { background: none; }
-.ayah-no { color: var(--primary); cursor: pointer; font-size: .9em; white-space: nowrap; border-radius: 6px; }
-.ayah.in-range { background: var(--range); border-radius: 6px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-.surah-head {
-  text-align: center; font-size: 1.15rem; margin: 10px 0 2px;
-  border: 1px solid var(--frame); border-radius: 10px; background: var(--frame-soft);
-}
-.basmala { text-align: center; }
-.w.m-once { background: var(--warn-soft); color: var(--warn); text-decoration: underline wavy; text-underline-offset: 6px; }
-.w.m-rep, .ayah-no.m-rep { background: var(--danger-soft); color: var(--danger); text-decoration: underline wavy; text-underline-offset: 6px; font-weight: 700; }
-.ayah-no.m-once { background: var(--warn-soft); }
-.w.m-ok, .ayah-no.m-ok { background: var(--ok-soft); color: var(--ok); }
-.legend { margin-top: 10px; line-height: 2.2; }
-.legend .w { padding: 0 6px; border-radius: 6px; }
-.dlg-word {
-  font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 2rem; line-height: 2.2;
-  text-align: center; background: var(--bg); border-radius: 10px; padding: 6px 10px;
-}
-.kind-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.kind-grid .btn { min-height: 48px; }
-
-.note-text { white-space: pre-wrap; margin-top: 4px; }
-.warn-note { margin: 8px 0 0; padding: 6px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); }
-
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-
 /* ============ التسميع على المصحف ============ */
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--topbar); }
-.rec-bar {
-  position: sticky; top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); z-index: 4;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 6px 16px -12px rgba(0, 0, 0, .5);
-}
-.rec-count { font-variant-numeric: tabular-nums; }
-.kind-chips { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; padding-bottom: 2px; scrollbar-width: none; }
 .kchip {
   flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--text);
   border-radius: 999px; padding: 4px 12px; font: inherit; font-size: .85rem; cursor: pointer; min-height: 34px;
 }
 .kchip.on { background: var(--danger); border-color: var(--danger); color: var(--card); font-weight: 700; }
-.mushaf-page .w, .mushaf-page .ayah-no { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
-.w.m-now, .ayah-no.m-now { background: var(--danger); color: var(--card); text-decoration: none; font-weight: 400; }
-.w.m-now.m-rep { box-shadow: 0 0 0 2px var(--warn); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; margin: 0; cursor: pointer; position: relative; }
@@ -305,3 +299,127 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .draft-card { border-color: var(--danger); border-style: dashed; }
 .qw { font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 1.1em; line-height: 1.6; }
 .word.qw { font-size: 1.5rem; font-weight: 400; }
+
+/* ============ المصحف بملء الشاشة (على نسق مصحف الوقوف) ============ */
+body.mushaf-mode { overflow: hidden; }
+body.mushaf-mode .topbar, body.mushaf-mode .tabbar { display: none; }
+body.mushaf-mode #toast { bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+.mapp {
+  position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+  background: var(--m-paper); color: var(--m-ink); -webkit-tap-highlight-color: transparent;
+}
+.mloading { margin: auto; color: var(--m-soft); }
+.mbar {
+  flex: none; display: flex; align-items: center; gap: 6px; background: var(--m-frame); color: var(--m-on-frame);
+  padding-top: calc(6px + env(safe-area-inset-top, 0px)); padding-bottom: 6px;
+  padding-left: max(10px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
+}
+.ibtn { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 10px; color: inherit; background: none; border: 0; cursor: pointer; }
+.ibtn:active { background: rgba(255, 255, 255, .12); }
+.ibtn svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mtitle { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.mtitle .sname { font-family: "Amiri", "Amiri Quran", serif; font-size: 1.15rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mtitle .meta { font-size: .75rem; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mcount { flex: none; font-size: .8rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--m-now); color: #fff; font-variant-numeric: tabular-nums; }
+.mcount.zero { background: rgba(255, 255, 255, .16); color: var(--m-on-frame); font-weight: 400; }
+.mfinish {
+  flex: none; font: inherit; font-size: .9rem; font-weight: 700; cursor: pointer; min-height: 38px;
+  padding: 4px 14px; border-radius: 10px; border: 0; background: var(--m-on-frame); color: var(--m-frame);
+}
+.kbar {
+  flex: none; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; background: var(--m-edge);
+  border-bottom: 1px solid var(--m-line); padding-block: 7px;
+  padding-left: max(10px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
+}
+.kbar::-webkit-scrollbar { display: none; }
+.kchip {
+  flex: none; border: 1px solid var(--m-line); background: var(--m-paper); color: var(--m-ink);
+  border-radius: 999px; padding: 3px 13px; font: inherit; font-size: .85rem; cursor: pointer; min-height: 34px;
+}
+.kchip.on { background: var(--m-now); border-color: var(--m-now); color: #fff; font-weight: 700; }
+.mnote { flex: none; font-size: .78rem; text-align: center; padding: 4px 10px; background: var(--warn-soft); color: var(--warn); }
+.mstage {
+  flex: 1; min-height: 0; overflow: auto; overflow-x: hidden; display: flex; justify-content: center; align-items: flex-start;
+  background: var(--m-paper); touch-action: pan-y; padding-block: 6px;
+  padding-left: max(8px, env(safe-area-inset-left, 0px)); padding-right: max(8px, env(safe-area-inset-right, 0px));
+}
+.mpage { will-change: transform; width: 100%; max-width: 760px; display: flex; flex-direction: column; background: var(--m-paper); }
+.phead { display: flex; justify-content: space-between; align-items: baseline; font-size: .85rem; color: var(--m-ink); padding: 0 2px 6px; }
+.phead .ps { font-family: "Amiri", "Amiri Quran", serif; font-size: 1.05rem; }
+.lines { display: flex; flex-direction: column; font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 22px; color: var(--m-ink); }
+.line { display: flex; justify-content: space-between; align-items: center; white-space: nowrap; min-height: 1.9em; line-height: 1.9; }
+.line.center { justify-content: center; gap: .32em; }
+.mpage .w, .mpage .ayah-no {
+  cursor: pointer; border-radius: 5px; position: relative; transition: background .15s, color .15s;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation;
+}
+.mpage .w:active { background: var(--m-hl); }
+.ayah-no {
+  display: inline-grid; place-items: center; min-width: 1.45em; height: 1.45em; margin: 0 .08em; padding: 0 .1em;
+  font-size: .7em; line-height: 1; border: 1.5px solid var(--m-cart); border-radius: 50%; background: var(--m-cart-bg);
+  font-family: "Amiri", "Amiri Quran", serif; font-variant-numeric: tabular-nums;
+}
+.mpage .w.m-once { color: var(--m-once); }
+.mpage .w.m-rep { color: var(--m-now); text-decoration: underline wavy; text-decoration-thickness: 1px; text-underline-offset: .35em; }
+.mpage .w.m-ok { color: var(--m-ok); }
+.mpage .w.m-now { color: var(--m-now); background: var(--m-now-bg); text-decoration: none; }
+.ayah-no.m-once { border-color: var(--m-once); }
+.ayah-no.m-rep, .ayah-no.m-now { border-color: var(--m-now); background: var(--m-now-bg); color: var(--m-now); }
+.ayah-no.m-ok { border-color: var(--m-ok); }
+/* عنوان السورة: شريط أخضر مزخرف وفي وسطه خرطوشة فاتحة ووردتان */
+.shead {
+  justify-content: center; position: relative; margin: .06em 0; height: 1.6em; min-height: 1.6em; padding: 0;
+  border: .07em solid #1f6b3e; outline: .03em solid #1f6b3e; outline-offset: .05em; border-radius: .1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' fill='%23338a55'/%3E%3Cpath d='M14 3c3 4 3 7 0 11c-3-4-3-7 0-11zM14 25c-3-4-3-7 0-11c3 4 3 7 0 11zM3 14c4-3 7-3 11 0c-4 3-7 3-11 0zM25 14c-4 3-7 3-11 0c4-3 7-3 11 0z' fill='%2389cf98'/%3E%3Ccircle cx='14' cy='14' r='2.2' fill='%23f2c7d4'/%3E%3Ccircle cx='0' cy='0' r='3' fill='%23bfe6c6'/%3E%3Ccircle cx='28' cy='0' r='3' fill='%23bfe6c6'/%3E%3Ccircle cx='0' cy='28' r='3' fill='%23bfe6c6'/%3E%3Ccircle cx='28' cy='28' r='3' fill='%23bfe6c6'/%3E%3C/svg%3E") center/1.05em 1.05em repeat;
+}
+.shead .nm {
+  position: relative; z-index: 1; font-family: "Amiri", "Amiri Quran", serif; font-weight: 700; font-size: .8em; line-height: 1; color: #123b26;
+  background: #f5fbf2; border: .08em solid #1f6b3e; border-radius: 2em; padding: .18em 2em .3em; box-shadow: 0 0 0 .14em #f5fbf2 inset;
+}
+.shead .ro {
+  position: absolute; top: 50%; width: 1.05em; height: 1.05em; margin-top: -.525em; border-radius: 50%; z-index: 1;
+  background: radial-gradient(circle, #c2185b 0 12%, #f8bbd0 13% 30%, #fff 31% 40%, #e57399 41% 62%, #f5fbf2 63% 72%, #1f6b3e 73% 78%, #f5fbf2 79%);
+}
+.shead .ro.r1 { right: 9%; }
+.shead .ro.r2 { left: 9%; }
+.basm { justify-content: center; }
+.pfoot { display: flex; justify-content: center; margin-top: 10px; padding-right: 30px; }
+.pfoot span {
+  font-family: "Amiri", "Amiri Quran", serif; font-size: 1rem; font-weight: 700; color: #123b26; position: relative;
+  border: 1.5px solid #1f6b3e; background: #f5fbf2; border-radius: 10px; padding: 0 26px; line-height: 1.7;
+  box-shadow: 0 0 0 3px #f5fbf2, 0 0 0 4.5px #1f6b3e; font-variant-numeric: tabular-nums;
+}
+.pfoot span::before {
+  content: ""; position: absolute; right: -30px; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%; border: 1.5px solid #1f6b3e;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Crect width='28' height='28' fill='%23338a55'/%3E%3Cpath d='M14 3c3 4 3 7 0 11c-3-4-3-7 0-11zM14 25c-3-4-3-7 0-11c3 4 3 7 0 11zM3 14c4-3 7-3 11 0c-4 3-7 3-11 0zM25 14c-4 3-7 3-11 0c4-3 7-3 11 0z' fill='%2389cf98'/%3E%3Ccircle cx='14' cy='14' r='2.2' fill='%23f2c7d4'/%3E%3C/svg%3E") center/14px repeat;
+}
+.mpager {
+  flex: none; display: flex; gap: 6px; align-items: center; justify-content: center; background: var(--m-edge);
+  box-shadow: 0 -1px 0 var(--m-line); padding-top: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+}
+.mpager button { min-width: 44px; height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--m-line); background: var(--m-paper); color: var(--m-ink); font: inherit; font-size: .9rem; cursor: pointer; }
+.mpager button:disabled { opacity: .4; }
+.mpager input { width: 64px; height: 34px; min-height: 0; padding: 0; text-align: center; border: 1px solid var(--m-line); border-radius: 9px; background: var(--m-paper); color: var(--m-ink); font-variant-numeric: tabular-nums; }
+/* إخفاء الأشرطة بالضغط على فراغ الصفحة */
+body.chrome-hidden .mbar, body.chrome-hidden .kbar, body.chrome-hidden .mpager, body.chrome-hidden .mnote { display: none; }
+body.chrome-hidden .mstage { padding-top: max(6px, env(safe-area-inset-top, 0px)); padding-bottom: max(6px, env(safe-area-inset-bottom, 0px)); }
+.slist { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+.sitem { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; text-align: start; }
+.sitem .no { font-size: .7rem; color: var(--muted); width: 22px; }
+.sitem .nm { font-family: "Amiri", "Amiri Quran", serif; font-size: 1.05rem; flex: 1; }
+.sitem .pg { font-size: .7rem; color: var(--muted); }
+/* النوافذ كورقة سفلية على الجوال */
+.grip { width: 42px; height: 5px; border-radius: 9px; background: var(--line); margin: -6px auto 8px; }
+@media (max-width: 640px) {
+  dialog { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 18px 18px 0 0; max-height: 88vh; }
+  dialog[open] { animation: sheet-up .22s ease-out; }
+  #dlg-form { padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+}
+@keyframes sheet-up { from { transform: translateY(40%); opacity: .4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { dialog[open] { animation: none; } }
+.dlg-word {
+  font-family: "Amiri Quran", "Noto Naskh Arabic", serif; font-size: 2rem; line-height: 2.2;
+  text-align: center; background: var(--bg); border-radius: 10px; padding: 6px 10px;
+}
+.kind-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kind-grid .btn { min-height: 48px; white-space: normal; }

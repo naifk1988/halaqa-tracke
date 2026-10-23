@@ -830,23 +830,25 @@ function lastStartAtOrBefore(starts, g) {
   while (i > 0 && starts[i] > g) i--;
   return i + 1;
 }
-const pageOf = (s, a) => lastStartAtOrBefore(MUSHAF_PAGES, toGlobal(s, a));
+const pageOf = (s, a) => lastStartAtOrBefore(MUSHAF_LINE_PAGE_STARTS, toGlobal(s, a));
 const juzOf = (s, a) => lastStartAtOrBefore(JUZ_STARTS, toGlobal(s, a));
+const quarterOf = (g) => lastStartAtOrBefore(HIZB_QUARTERS, g);
 const toArabicDigits = (n) => String(n).replace(/\d/g, (d) => "٠١٢٣٤٥٦٧٨٩"[d]);
 
 let quranLoading = null;
 function loadQuran() {
   if (quranReady()) return Promise.resolve();
-  quranLoading = quranLoading || new Promise((resolve, reject) => {
+  const load = (src) => new Promise((resolve, reject) => {
     const sc = document.createElement("script");
-    sc.src = "quran-data.js";
+    sc.src = src;
     sc.onload = resolve;
-    sc.onerror = () => { quranLoading = null; reject(); };
+    sc.onerror = reject;
     document.head.appendChild(sc);
   });
+  quranLoading = quranLoading || Promise.all([load("quran-data.js"), load("mushaf-lines.js")]).catch((e) => { quranLoading = null; throw e; });
   return quranLoading;
 }
-const quranReady = () => typeof QURAN_TEXT !== "undefined";
+const quranReady = () => typeof QURAN_TEXT !== "undefined" && typeof MUSHAF_LINES !== "undefined";
 // النص المصدر بترميز خط مجمع الملك فهد للتنوين المتتابع؛ يُحوَّل عند العرض إلى رموز يونيكود القياسية التي يدعمها خط المصحف
 const OPEN_TANWEEN = { "\u0657": "\u08F0", "\u065E": "\u08F1", "\u0656": "\u08F2" };
 const ayahText = (s, a) => ((QURAN_TEXT[s - 1] || [])[a - 1] || "").replace(/[\u0656\u0657\u065E]/g, (c) => OPEN_TANWEEN[c]);
@@ -894,12 +896,56 @@ function reciteHash(sid) {
   const [s, a] = nextStart(sid);
   return mushafHash(`${s}-${a}`, sid);
 }
-const pageRange = (page) => [MUSHAF_PAGES[page - 1], page < 604 ? MUSHAF_PAGES[page] - 1 : 6236];
+const pageRange = (page) => [MUSHAF_LINE_PAGE_STARTS[page - 1], page < 604 ? MUSHAF_LINE_PAGE_STARTS[page] - 1 : 6236];
+
+const JUZ_NAMES = ["الأول", "الثاني", "الثالث", "الرابع", "الخامس", "السادس", "السابع", "الثامن", "التاسع", "العاشر",
+  "الحادي عشر", "الثاني عشر", "الثالث عشر", "الرابع عشر", "الخامس عشر", "السادس عشر", "السابع عشر", "الثامن عشر", "التاسع عشر", "العشرون",
+  "الحادي والعشرون", "الثاني والعشرون", "الثالث والعشرون", "الرابع والعشرون", "الخامس والعشرون", "السادس والعشرون", "السابع والعشرون",
+  "الثامن والعشرون", "التاسع والعشرون", "الثلاثون"];
+
+// حالة شاشة المصحف الحالية (تُستعمل لتحديث الألوان دون إعادة رسم الصفحة)
+let mushafView = null;
+
+// الصفحة سطراً سطراً كما في مصحف المدينة: 15 سطراً، عنوان السورة المزخرف، والبسملة
+function mushafPageHtml(page) {
+  const lines = MUSHAF_LINES[page - 1];
+  const [first] = pageRange(page);
+  const surahs = [...new Set(lines.flatMap((l) => (Array.isArray(l) && typeof l[0] === "number" ? [fromGlobal(l[0])[0], fromGlobal(l[2])[0]] : [])))];
+  const q = quarterOf(first);
+  const hizb = Math.ceil(q / 4), part = (q - 1) % 4;
+  const head = `<div class="phead"><span>الجزء ${JUZ_NAMES[juzOf(...fromGlobal(first)) - 1]}، ${["", "ربع ", "نصف ", "ثلاثة أرباع "][part]}الحزب ${toArabicDigits(hizb)}</span>
+    <span class="ps">${surahs.map(surahName).join(" · ")}</span></div>`;
+  let html = "";
+  for (const l of lines) {
+    if (!l) { html += `<div class="line"></div>`; continue; }
+    if (l[0] === "h") {
+      html += `<div class="line shead"><span class="ro r1"></span><span class="nm">سورة ${surahName(l[1])}</span><span class="ro r2"></span></div>`;
+      continue;
+    }
+    if (l[0] === "b") { html += `<div class="line basm">${ayahText(1, 1)}</div>`; continue; }
+    let [g, w] = l;
+    const [g2, w2] = [l[2], l[3]];
+    let n = 0, parts = "";
+    while (true) {
+      const [s, a] = fromGlobal(g);
+      const words = ayahText(s, a).split(" ");
+      parts += `<span class="w" data-s="${s}" data-a="${a}" data-i="${w}">${words[w]}</span>`;
+      n++;
+      const lastOfAyah = w === words.length - 1;
+      if (lastOfAyah) parts += `<span class="ayah-no" data-s="${s}" data-a="${a}">${toArabicDigits(a)}</span>`;
+      if (g === g2 && w === w2) break;
+      if (lastOfAyah) { g++; w = 0; } else w++;
+    }
+    html += `<div class="line${page <= 2 || n <= 2 ? " center" : ""}">${parts}</div>`;
+  }
+  return `<div class="mpage mushaf-page">${head}<div class="lines">${html}</div><div class="pfoot"><span>${toArabicDigits(page)}</span></div></div>`;
+}
 
 function pageMushaf(pageArg, sidArg, sesArg) {
+  document.body.classList.add("mushaf-mode");
   if (!quranReady()) {
     loadQuran().then(render, () => { view.innerHTML = `<div class="card empty">تعذّر تحميل المصحف، تأكد من الاتصال ثم أعد المحاولة</div>`; });
-    return `<div class="card empty">جارٍ تحميل المصحف…</div>`;
+    return `<div class="mapp"><div class="mloading">جارٍ تحميل المصحف…</div></div>`;
   }
   // فتح تبويب المصحف مباشرة يعود إلى آخر صفحة وطالب
   if (!pageArg) {
@@ -918,68 +964,194 @@ function pageMushaf(pageArg, sidArg, sesArg) {
   const page = ref ? pageOf(mushafStart.s, mushafStart.a) : Math.min(604, Math.max(1, Number(pageArg) || 1));
   const ses = sesArg && db.sessions.find((x) => x.id === sesArg && x.studentId === sid);
   if (ses && ses.draft && ses.lastPage !== page) { ses.lastPage = page; save(); }
-  const [first, last] = pageRange(page);
-  const [s0, a0] = fromGlobal(first);
   try { localStorage.setItem("halaqa-mushaf-last", JSON.stringify({ page, sid })); } catch {}
-  const marks = mushafMarks(sid, ses && ses.id);
-  const basmala = ayahText(1, 1);
-  const rs = ses ? toGlobal(ses.surah, ses.fromAyah) : 0, re = ses && !ses.draft ? toGlobal(...sesEnd(ses)) : 0;
-  const inRange = (g) => ses && (ses.draft ? g >= rs : g >= rs && g <= re);
-
-  let html = "";
-  for (let g = first; g <= last; g++) {
-    const [s, a] = fromGlobal(g);
-    if (a === 1) {
-      html += `<div class="surah-head">سورة ${surahName(s)}</div>`;
-      if (s !== 1 && s !== 9) html += `<div class="basmala">${basmala}</div>`;
-    }
-    const words = ayahText(s, a).split(" ");
-    html += `<span class="ayah ${inRange(g) ? "in-range" : ""}">` +
-      words.map((w, i) => `<span class="w ${marks.get(`${s}:${a}:${i}`) || ""}" data-s="${s}" data-a="${a}" data-i="${i}">${w}</span>`).join(" ") +
-      ` <span class="ayah-no ${marks.get(`${s}:${a}`) || ""}" data-s="${s}" data-a="${a}" title="خطأ في الآية كاملة">﴿${toArabicDigits(a)}﴾</span></span> `;
-  }
-
+  mushafView = { page, sid, sesId: ses ? ses.id : "" };
   const st = sid && getStudent(sid);
-  const count = ses ? sessionMistakes(ses).length : 0;
-  const recBar = st ? `
-    <div class="rec-bar">
-      <div class="row between">
-        <div class="grow" style="min-width:0">
-          <b>🎙️ ${esc(st.name)}</b>
-          <div class="small muted">${ses && !ses.draft ? `تعديل أخطاء تسميع ${fmtDate(ses.date)}` : ses ? `تسميع جارٍ · بدأ من ${surahName(ses.surah)} ${ses.fromAyah}` : "اضغط على الكلمة عند خطأ الطالب"}</div>
-        </div>
-        <span class="badge ${count ? "danger" : "ok"} rec-count">${count} خطأ</span>
-        <button class="btn sm primary" data-action="finish-session">${ses && !ses.draft ? "تم ✓" : "إنهاء ✓"}</button>
-      </div>
-      <div class="kind-chips" role="radiogroup" aria-label="نوع الخطأ">
-        ${MISTAKE_KINDS.map((k) => `<button class="kchip ${k === mushafKind ? "on" : ""}" data-set-kind="${k}" role="radio" aria-checked="${k === mushafKind}">${k}</button>`).join("")}
-      </div>
-    </div>` : "";
+  const [first] = pageRange(page);
+  const [s0] = fromGlobal(first);
 
   return `
-    ${recBar}
-    <div class="row between mushaf-nav">
-      <button class="btn sm" data-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>→ السابقة</button>
-      <span class="small">الجزء ${juzOf(s0, a0)} · صفحة <input id="mushaf-page" type="number" min="1" max="604" value="${page}" aria-label="رقم الصفحة"></span>
-      <button class="btn sm" data-page="${page + 1}" ${page >= 604 ? "disabled" : ""}>التالية ←</button>
-    </div>
-    ${st && riwayaOf(st) !== DEFAULT_RIWAYA ? `<p class="small warn-note">🎙️ الطالب يقرأ برواية <b>${esc(riwayaOf(st))}</b>، والنص المعروض برواية حفص عن عاصم؛ فانتبه لفروق الكلمات وعدّ الآي.</p>` : ""}
-    <div class="mushaf-page ${sid ? "" : "no-student"}">${html}</div>
-    <p class="small muted legend">
-      ${sid ? `ضغطة على الكلمة تسجّل الخطأ، وضغطة ثانية تلغيه. ضغطة على رقم الآية لخطأ في الآية كاملة، وضغطة مطوّلة على الكلمة لتفاصيلها وسجلها.`
-        : `اختر الطالب لتبدأ تسجيل أخطائه بالضغط على الكلمات.`}<br>
-      <span class="w m-now">خطأ في هذا التسميع</span> <span class="w m-once">خطأ سابق</span> <span class="w m-rep">متكرر</span> <span class="w m-ok">أُتقن</span>
-    </p>
-    <div class="card mushaf-bar">
-      <div class="grid2">
-        <label style="margin:0"><span>الطالب</span>
-          <select id="mushaf-student"><option value="">— اختر الطالب —</option>
-            ${db.students.slice().sort((x, y) => x.name.localeCompare(y.name, "ar")).map((x) => `<option value="${x.id}" ${x.id === sid ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
-          </select></label>
-        <label style="margin:0"><span>الانتقال إلى سورة</span><select id="mushaf-surah">${surahOptions(s0)}</select></label>
+  <div class="mapp${st ? " has-student" : ""}">
+    <header class="mbar">
+      <a class="ibtn" href="${st ? `#/student/${sid}` : "#/"}" aria-label="رجوع">
+        <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></a>
+      <button class="ibtn" data-action="mushaf-index" aria-label="فهرس السور واختيار الطالب">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+      <div class="mtitle">
+        <span class="sname">${st ? `🎙️ ${esc(st.name)}` : `سورة ${surahName(s0)}`}</span>
+        <span class="meta" id="mushaf-sub"></span>
       </div>
-    </div>
-    <p class="small muted">نص المصحف: موسوعة القرآن الكريم (QuranEnc)، وترقيم الصفحات وفق مصحف المدينة.</p>`;
+      ${st ? `<span class="mcount" id="mushaf-count"></span>
+        <button class="mfinish" data-action="finish-session" id="mushaf-finish"></button>`
+        : `<button class="mfinish" data-action="mushaf-index">اختر الطالب</button>`}
+    </header>
+    ${st ? `<div class="kbar" role="radiogroup" aria-label="نوع الخطأ">
+      ${MISTAKE_KINDS.map((k) => `<button class="kchip ${k === mushafKind ? "on" : ""}" data-set-kind="${k}" role="radio" aria-checked="${k === mushafKind}">${k}</button>`).join("")}
+    </div>` : ""}
+    ${st && riwayaOf(st) !== DEFAULT_RIWAYA ? `<div class="mnote">🎙️ الطالب يقرأ برواية ${esc(riwayaOf(st))}، والمصحف المعروض برواية حفص.</div>` : ""}
+    <main class="mstage" id="mstage">${mushafPageHtml(page)}</main>
+    <nav class="mpager" aria-label="التنقل بين الصفحات">
+      <button data-page="${page + 1}" ${page >= 604 ? "disabled" : ""} aria-label="الصفحة التالية">التالية ‹</button>
+      <input id="mushaf-page" inputmode="numeric" value="${page}" aria-label="رقم الصفحة">
+      <button data-page="${page - 1}" ${page <= 1 ? "disabled" : ""} aria-label="الصفحة السابقة">› السابقة</button>
+    </nav>
+  </div>`;
+}
+
+// بعد الرسم: ملاءمة الأسطر للعرض، وتلوين الأخطاء، وحركة الانتقال
+function afterMushafRender() {
+  if (!mushafView || !$(".mpage")) return;
+  refreshMushafMarks();
+  fitLines();
+  if (document.fonts) document.fonts.load('20px "Amiri Quran"').then(fitLines).catch(() => {});
+  slideIn();
+}
+
+// تحديث ألوان الكلمات والعداد فقط، دون إعادة بناء الصفحة (حتى يبقى التسميع سلساً)
+function refreshMushafMarks() {
+  if (!mushafView) return;
+  const { sid } = mushafView;
+  const ses = mushafView.sesId && db.sessions.find((x) => x.id === mushafView.sesId);
+  const marks = mushafMarks(sid, ses && ses.id);
+  $$(".mpage .w").forEach((el) => {
+    el.className = "w " + (marks.get(`${el.dataset.s}:${el.dataset.a}:${el.dataset.i}`) || "");
+  });
+  $$(".mpage .ayah-no").forEach((el) => {
+    el.className = "ayah-no " + (marks.get(`${el.dataset.s}:${el.dataset.a}`) || "");
+  });
+  const count = ses ? sessionMistakes(ses).length : 0;
+  const c = $("#mushaf-count");
+  if (c) { c.textContent = `${toArabicDigits(count)} خطأ`; c.classList.toggle("zero", !count); }
+  const f = $("#mushaf-finish");
+  if (f) f.textContent = ses && !ses.draft ? "تم ✓" : "إنهاء ✓";
+  const sub = $("#mushaf-sub");
+  if (sub) {
+    const { page } = mushafView;
+    const where = `الصفحة ${toArabicDigits(page)} · الجزء ${toArabicDigits(juzOf(...fromGlobal(pageRange(page)[0])))}`;
+    sub.textContent = !sid ? where : ses && !ses.draft ? `تعديل أخطاء تسميع ${fmtDate(ses.date)}` : ses ? `${where} · تسميع جارٍ` : `${where} · اضغط على الكلمة عند الخطأ`;
+  }
+}
+
+// تكبير الخط حتى يملأ أطول سطر عرض الصفحة، مع بقاء الأسطر الخمسة عشر داخل الشاشة
+function fitLines() {
+  const box = $(".mpage .lines");
+  if (!box) return;
+  const stage = $("#mstage");
+  const avail = box.clientWidth;
+  let fs = parseFloat(box.style.fontSize) || 22;
+  let max = 0;
+  $$(".line:not(.shead):not(.basm)", box).forEach((l) => {
+    // الأسطر المتوسطة بينها فراغات ثابتة بين الكلمات تُحسب ضمن العرض
+    let w = (parseFloat(getComputedStyle(l).columnGap) || 0) * Math.max(0, l.children.length - 1);
+    for (const c of l.children) w += c.getBoundingClientRect().width;
+    if (w > max) max = w;
+  });
+  if (!max) return;
+  let nf = fs * (avail * 0.97) / max;
+  const n = $$(".line", box).length || 15;
+  const free = stage.clientHeight - ($(".phead", stage)?.offsetHeight || 0) - ($(".pfoot", stage)?.offsetHeight || 0) - 24;
+  const hMax = free / (n * 1.9);
+  if (hMax > 10) nf = Math.min(nf, hMax);
+  nf = Math.max(13, Math.min(44, nf));
+  if (Math.abs(nf - fs) > 0.3) box.style.fontSize = nf.toFixed(2) + "px";
+}
+window.addEventListener("resize", () => { if (mushafView) fitLines(); });
+
+// حركة دخول الصفحة الجديدة من جهة الانتقال
+let slideFrom = 0;
+function slideIn() {
+  const d = slideFrom; slideFrom = 0;
+  const pg = $(".mpage");
+  if (!d || !pg || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const w = $("#mstage").clientWidth;
+  pg.style.transition = "none";
+  pg.style.transform = `translate3d(${d * w * 0.6}px,0,0)`;
+  pg.style.opacity = ".4";
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    pg.style.transition = "transform .24s cubic-bezier(.2,.8,.2,1), opacity .24s";
+    pg.style.transform = "translate3d(0,0,0)";
+    pg.style.opacity = "1";
+  }));
+}
+function goPage(d) {
+  if (!mushafView) return;
+  const n = mushafView.page + d;
+  if (n < 1 || n > 604) return;
+  slideFrom = d > 0 ? -1 : 1;
+  location.hash = mushafHash(n, mushafView.sid, mushafView.sesId);
+}
+
+// السحب بين الصفحات: الصفحة تتبع الإصبع، والتالية في المصحف إلى اليسار فيكشفها السحب إلى اليمين
+let swipeBlockClick = 0;
+(function () {
+  let x0 = null, y0 = null, dx = 0, drag = false, pg = null;
+  view.addEventListener("touchstart", (e) => {
+    if (!e.target.closest("#mstage") || e.touches.length !== 1 || dlg.open) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; drag = false; pg = $(".mpage");
+  }, { passive: true });
+  view.addEventListener("touchmove", (e) => {
+    if (x0 == null || !pg) return;
+    dx = e.touches[0].clientX - x0;
+    const dy = e.touches[0].clientY - y0;
+    if (!drag) {
+      if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) { drag = true; clearTimeout(longPressTimer); }
+      else { if (Math.abs(dy) > 14) x0 = null; return; }
+    }
+    const edge = (dx > 0 && mushafView.page >= 604) || (dx < 0 && mushafView.page <= 1);
+    pg.style.transition = "none";
+    pg.style.transform = `translate3d(${edge ? dx * 0.25 : dx}px,0,0)`;
+  }, { passive: true });
+  const end = () => {
+    if (x0 == null) return;
+    x0 = null;
+    if (!drag || !pg) return;
+    drag = false;
+    swipeBlockClick = Date.now();
+    const d = dx > 0 ? 1 : -1, n = mushafView.page + d, w = $("#mstage").clientWidth;
+    if (Math.abs(dx) > Math.min(90, w * 0.22) && n >= 1 && n <= 604) {
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) return goPage(d);
+      pg.style.transition = "transform .16s ease-in";
+      pg.style.transform = `translate3d(${dx > 0 ? w : -w}px,0,0)`;
+      setTimeout(() => goPage(d), 150);
+    } else {
+      pg.style.transition = "transform .2s ease-out";
+      pg.style.transform = "translate3d(0,0,0)";
+    }
+  };
+  view.addEventListener("touchend", end, { passive: true });
+  view.addEventListener("touchcancel", end, { passive: true });
+})();
+document.addEventListener("keydown", (e) => {
+  if (!mushafView || dlg.open || e.target.matches("input, textarea, select")) return;
+  if (e.key === "ArrowLeft") goPage(1);
+  if (e.key === "ArrowRight") goPage(-1);
+});
+
+// فهرس السور واختيار الطالب في ورقة سفلية
+function mushafIndexSheet() {
+  const { sid } = mushafView;
+  const form = openDialog(`
+    <div class="grip"></div>
+    <h2>المصحف</h2>
+    <label><span>الطالب</span>
+      <select id="mushaf-student"><option value="">— بلا طالب (تصفح فقط) —</option>
+        ${db.students.slice().sort((x, y) => x.name.localeCompare(y.name, "ar")).map((x) => `<option value="${x.id}" ${x.id === sid ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+      </select></label>
+    <p class="field-label">فهرس السور</p>
+    <div class="slist">${SURAHS.map(([n], i) => `<button type="button" class="sitem" data-surah="${i + 1}">
+      <span class="no">${toArabicDigits(i + 1)}</span><span class="nm">${n}</span><span class="pg">${toArabicDigits(pageOf(i + 1, 1))}</span></button>`).join("")}</div>
+    <div class="dlg-actions"><button type="button" class="btn" data-close>إغلاق</button></div>`, () => false, (e) => {
+    const b = e.target.closest("[data-surah]");
+    if (!b) return;
+    dlg.close();
+    const sel = $("#mushaf-student", form).value;
+    location.hash = mushafHash(`${b.dataset.surah}-1`, sel, sel === sid ? mushafView.sesId : "");
+  });
+  $("#mushaf-student", form).addEventListener("change", (e) => {
+    dlg.close();
+    const sel = e.target.value;
+    location.hash = sel ? reciteHash(sel) : mushafHash(mushafView.page, "");
+  });
 }
 
 // يعيد التسميع الذي تُسجَّل فيه الأخطاء، وينشئ تسميعاً جارياً عند أول خطأ
@@ -1003,7 +1175,7 @@ function mushafTap(el) {
   const r = parseRoute();
   const sid = r.tab;
   if (!getStudent(sid)) return toast("اختر الطالب أولاً من أسفل الصفحة");
-  const page = Number($("#mushaf-page").value);
+  const page = mushafView.page;
   const s = Number(el.dataset.s), a = Number(el.dataset.a);
   const i = el.classList.contains("ayah-no") ? null : Number(el.dataset.i);
   const ses = ensureSession(sid, r.extra !== "-" ? r.extra : "", page);
@@ -1029,8 +1201,10 @@ function mushafTap(el) {
   // تحديث العنوان دون إطلاق hashchange حتى لا تقفز الصفحة إلى الأعلى
   const target = mushafHash(page, sid, ses.id);
   if (location.hash !== target) history.replaceState(null, "", target);
-  render();
+  mushafView.sesId = ses.id;
+  refreshMushafMarks();
 }
+const refreshAfterChange = () => (mushafView ? refreshMushafMarks() : render());
 
 // ضغطة مطوّلة: تفاصيل الموضع وسجله وتغيير نوع الخطأ
 function mushafWordDialog(sid, sesId, s, a, i) {
@@ -1060,7 +1234,7 @@ function mushafWordDialog(sid, sesId, s, a, i) {
         <button type="button" class="btn sm" data-toggle-resolve>${resolved ? "إعادة فتح" : "تم الإتقان ✓"}</button>
       </div>` : ""}
     <div class="dlg-actions"><button class="btn primary">تم</button></div>`, () => {
-    if (current) { current.note = $("[name=note]", form).value.trim(); save(); render(); }
+    if (current) { current.note = $("[name=note]", form).value.trim(); save(); refreshAfterChange(); }
   }, (e) => {
     const b = e.target.closest("button");
     if (!b) return;
@@ -1070,10 +1244,10 @@ function mushafWordDialog(sid, sesId, s, a, i) {
       save();
     } else if (b.dataset.delId) {
       db.mistakes = db.mistakes.filter((m) => m.id !== b.dataset.delId);
-      save(); dlg.close(); render(); toast("أُلغي الخطأ");
+      save(); dlg.close(); refreshAfterChange(); toast("أُلغي الخطأ");
     } else if ("toggleResolve" in b.dataset) {
       history.forEach((m) => (m.resolved = !resolved));
-      save(); dlg.close(); render(); toast(resolved ? "أُعيد فتح الخطأ" : "أحسنت! تم تعليمه كمُتقَن");
+      save(); dlg.close(); refreshAfterChange(); toast(resolved ? "أُعيد فتح الخطأ" : "أحسنت! تم تعليمه كمُتقَن");
     }
   });
 }
@@ -1120,18 +1294,26 @@ function render() {
   const r = parseRoute();
   $("#brand-name").textContent = db.settings.halaqaName || "دفتر الحلقة";
   const pages = { home: pageHome, students: pageStudents, mistakes: pageMistakes, reminders: pageReminders, settings: pageSettings };
+  if (r.page !== "mushaf") { mushafView = null; document.body.classList.remove("mushaf-mode", "chrome-hidden"); }
   view.innerHTML = r.page === "student" ? pageStudent(r.id, r.tab)
     : r.page === "mushaf" ? pageMushaf(r.id, r.tab, r.extra)
     : (pages[r.page] || pageHome)();
+  if (r.page === "mushaf") afterMushafRender();
   const navKey = r.page === "student" ? "students" : r.page;
   $$(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.nav === navKey));
 }
 
 view.addEventListener("click", (e) => {
+  if (Date.now() - swipeBlockClick < 400) return;
   const word = e.target.closest(".mushaf-page .w, .mushaf-page .ayah-no");
   if (word) {
     if (longPressFired) { longPressFired = false; return; }
     return mushafTap(word);
+  }
+  if (e.target.closest("#mstage")) {
+    document.body.classList.toggle("chrome-hidden");
+    requestAnimationFrame(() => requestAnimationFrame(fitLines));
+    return;
   }
   const t = e.target.closest("button, [data-action]");
   if (!t) return;
@@ -1149,7 +1331,7 @@ view.addEventListener("click", (e) => {
       save(); render();
     });
   }
-  if (d.page) { location.hash = mushafHash(d.page, r.tab !== "-" ? r.tab : "", r.extra !== "-" ? r.extra : ""); return; }
+  if (d.page) return goPage(Number(d.page) - mushafView.page);
   if (d.tab) { location.hash = `#/student/${r.id}/${d.tab}`; return; }
   if (d.mfilter) { pageStudent.filter = d.mfilter; return render(); }
   if (d.editSession) return finishSheet(db.sessions.find((s) => s.id === d.editSession));
@@ -1190,9 +1372,10 @@ view.addEventListener("click", (e) => {
         db.notes = db.notes.filter((n) => n.studentId !== st.id);
         save(); location.hash = "#/students";
       });
+    case "mushaf-index": return mushafIndexSheet();
     case "finish-session": {
       const sid = r.tab;
-      const page = Number($("#mushaf-page").value);
+      const page = mushafView.page;
       const ses = ensureSession(sid, r.extra !== "-" ? r.extra : "", page);
       if (ses.draft) {
         // نهاية المقطع المقترحة: آخر آية في الصفحة الحالية، أو آخر خطأ إن كان أبعد
@@ -1236,13 +1419,10 @@ view.addEventListener("submit", (e) => {
 
 view.addEventListener("change", (e) => {
   const id = e.target.id;
-  if (id === "mushaf-student" || id === "mushaf-surah" || id === "mushaf-page") {
-    const r = parseRoute();
-    const sid = $("#mushaf-student").value;
-    const page = id === "mushaf-surah" ? `${e.target.value}-1` : id === "mushaf-page" ? e.target.value : r.id;
-    // تغيير الطالب يلغي ربط الأخطاء بتسميع الطالب السابق
-    location.hash = mushafHash(page, sid, sid === r.tab && r.extra !== "-" ? r.extra : "");
-    return;
+  if (id === "mushaf-page") {
+    const v = parseInt(String(e.target.value).replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d)), 10);
+    if (v >= 1 && v <= 604) goPage(v - mushafView.page);
+    else e.target.value = mushafView.page;
   }
 });
 
