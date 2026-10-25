@@ -42,9 +42,9 @@ function emptyDb() {
       halaqaName: "حلقة القرآن", teacherName: "", countryCode: "966", template: DEFAULT_TEMPLATE,
       sessionTemplate: DEFAULT_SESSION_TEMPLATE, repeatThreshold: 2,
       programName: "برنامج صناعة الحافظ", programDays: [0, 1, 2, 3], makeupDay: 4, dailyPages: 1, passMistakes: 0,
-      teachers: [], supervisorName: "", supervisorPhone: ""
+      teachers: [], supervisorName: "", supervisorPhone: "", examMax: 100
     },
-    students: [], sessions: [], mistakes: [], notes: [], daily: [], sard: []
+    students: [], sessions: [], mistakes: [], notes: [], daily: [], sard: [], exams: []
   };
 }
 
@@ -485,7 +485,7 @@ function backupDialog() {
 // دمج نسخة من جهاز آخر (معلم آخر مثلاً): تُضاف السجلات الجديدة، ويُؤخذ الأحدث عند التعارض
 const stamp = (x) => x.updatedAt || x.createdAt || 0;
 function mergeData(data) {
-  for (const k of ["students", "sessions", "mistakes", "notes", "daily", "sard"]) {
+  for (const k of ["students", "sessions", "mistakes", "notes", "daily", "sard", "exams"]) {
     const map = new Map((db[k] || []).map((x) => [x.id, x]));
     for (const x of data[k] || []) if (!map.has(x.id) || stamp(x) > stamp(map.get(x.id))) map.set(x.id, x);
     db[k] = [...map.values()];
@@ -1599,6 +1599,7 @@ view.addEventListener("click", (e) => {
         db.notes = db.notes.filter((n) => n.studentId !== st.id);
         db.daily = db.daily.filter((x) => x.studentId !== st.id);
         db.sard = db.sard.filter((x) => x.studentId !== st.id);
+        db.exams = db.exams.filter((x) => x.studentId !== st.id);
         save(); location.hash = "#/students";
       });
     case "mushaf-index": return mushafIndexSheet();

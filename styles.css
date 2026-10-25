@@ -478,3 +478,16 @@ body.mushaf-mode #view { padding: 0; }
 .tabs .tabbtn.active { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .sep { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 .stats .stat b { font-variant-numeric: tabular-nums; }
+.examrow { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.examrow input { width: 96px; flex: none; text-align: center; }
+.tablewrap { overflow-x: auto; padding: 8px; }
+.report { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.report th { text-align: start; color: var(--muted); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.report td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.report tr:last-child td { border-bottom: 0; }
+.notice { border-color: var(--warn); background: var(--warn-soft); }
+@media print {
+  .topbar, .tabbar, .no-print, .btn, .tabs, #toast { display: none !important; }
+  body { padding: 0; background: #fff; }
+  .card { break-inside: avoid; border-color: #ccc; }
+}

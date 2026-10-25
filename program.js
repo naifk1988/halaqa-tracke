@@ -14,9 +14,42 @@ const dateObj = (s) => { const [y, m, d] = s.split("-").map(Number); return new 
 const addDays = (s, n) => { const d = dateObj(s); d.setDate(d.getDate() + n); return todayStr(d); };
 const dowOf = (s) => dateObj(s).getDay();
 const weekStartOf = (s) => addDays(s, -dowOf(s));
-const monthEnd = (ym) => { const [y, m] = ym.split("-").map(Number); return todayStr(new Date(y, m, 0)); };
-const shiftMonth = (ym, n) => { const [y, m] = ym.split("-").map(Number); return todayStr(new Date(y, m - 1 + n, 1)).slice(0, 7); };
-const fmtMonth = (ym) => dateObj(ym + "-01").toLocaleDateString("ar", { month: "long", year: "numeric" });
+// التقارير الشهرية بالشهر الهجري (تقويم أم القرى)، والميلادي إن لم يدعمه المتصفح.
+// مفتاح الشهر مثل "1448-05"
+const HIJRI = (() => {
+  try {
+    const f = new Intl.DateTimeFormat("en-u-ca-islamic-umalqura-nu-latn", { year: "numeric", month: "numeric", day: "numeric" });
+    return f.resolvedOptions().calendar.startsWith("islamic") ? f : null;
+  } catch { return null; }
+})();
+function monthOf(s) {
+  if (!HIJRI) return s.slice(0, 7);
+  const p = Object.fromEntries(HIJRI.formatToParts(dateObj(s)).map((x) => [x.type, x.value]));
+  return `${p.year}-${String(p.month).padStart(2, "0")}`;
+}
+const monthCache = {};
+function monthRange(key) {
+  if (monthCache[key]) return monthCache[key];
+  const [y, m] = key.split("-").map(Number);
+  let first, last;
+  if (!HIJRI) { first = `${key}-01`; last = todayStr(new Date(y, m, 0)); }
+  else {
+    // تقدير أولي (السنة الهجرية نحو 354.37 يوماً، وأولها 16 يوليو 622م) ثم تصحيح بالتقويم نفسه
+    let d = todayStr(new Date(622, 6, 16 + Math.round((y - 1) * 354.367 + (m - 1) * 29.53 + 14)));
+    for (let i = 0; i < 60 && monthOf(d) !== key; i++) d = addDays(d, monthOf(d) < key ? 10 : -10);
+    first = last = d;
+    while (monthOf(addDays(first, -1)) === key) first = addDays(first, -1);
+    while (monthOf(addDays(last, 1)) === key) last = addDays(last, 1);
+  }
+  return (monthCache[key] = { key, first, last });
+}
+const currentMonth = () => monthOf(todayStr());
+const shiftMonth = (key, n) => { const r = monthRange(key); return monthOf(n < 0 ? addDays(r.first, -1) : addDays(r.last, 1)); };
+function fmtMonth(key) {
+  const d = dateObj(monthRange(key).first);
+  return HIJRI ? d.toLocaleDateString("ar-SA-u-ca-islamic-umalqura", { month: "long", year: "numeric" })
+    : d.toLocaleDateString("ar", { month: "long", year: "numeric" });
+}
 function fmtKhatm(s) {
   const d = dateObj(s);
   let hijri = "";
@@ -57,12 +90,52 @@ function forEachPage(r, fn) {
   for (let p = Math.min(r.fromPage, r.toPage); p <= Math.max(r.fromPage, r.toPage); p++) fn(p);
 }
 // كل الصفحات المحفوظة: ما حفظه قبل البرنامج، وكل ورد أنجزه (يومياً أو تعويضاً)
-function memorizedSet(st) {
+function memorizedSet(st, until = "9999-12-31") {
   const set = new Set();
   const before = Math.min(TOTAL_PAGES, Number(st.memorizedBefore) || 0);
   for (let i = 0; i < before; i++) set.add(st.direction === "desc" ? TOTAL_PAGES - i : i + 1);
-  for (const r of db.daily) if (r.studentId === st.id && r.status === "done" && pagesOf(r)) forEachPage(r, (p) => set.add(p));
+  for (const r of db.daily) if (r.studentId === st.id && r.status === "done" && pagesOf(r) && r.date <= until) forEachPage(r, (p) => set.add(p));
   return set;
+}
+// آخر ما وصل إليه في الحفظ: أبعد صفحة في اتجاه حفظه
+function reachedPage(st, until) {
+  const set = memorizedSet(st, until);
+  if (!set.size) return 0;
+  return st.direction === "desc" ? Math.min(...set) : Math.max(...set);
+}
+const reachedText = (p) => (p ? `صفحة ${p} (سورة ${surahName(PAGE_SURAH[p - 1])})` : "لم يبدأ بعد");
+
+/* ---------- الاختبار الشهري ---------- */
+const examMax = () => Number(db.settings.examMax) || 100;
+const examFor = (id, key) => db.exams.find((e) => e.studentId === id && e.month === key);
+function examGrade(e) {
+  const x = e.score / (e.max || examMax());
+  return x >= 0.9 ? "ممتاز" : x >= 0.8 ? "جيد جداً" : x >= 0.7 ? "جيد" : x >= 0.6 ? "مقبول" : "ضعيف";
+}
+const examText = (e) => (e ? `${e.score} من ${e.max || examMax()} (${examGrade(e)})` : "لم يُرصد");
+
+// رصد درجات الاختبار الشهري لعدة طلاب دفعة واحدة
+function examDialog(key, ids) {
+  const sts = ids.map(getStudent).filter(Boolean);
+  openDialog(`
+    <h2>درجات الاختبار الشهري — ${fmtMonth(key)}</h2>
+    <p class="small muted">الدرجة من ${examMax()}. اترك الخانة فارغة لمن لم يُختبر.</p>
+    ${sts.map((st) => { const e = examFor(st.id, key); return `<div class="examrow">
+      <span class="grow"><b>${esc(st.name)}</b></span>
+      <input name="score" data-sid="${st.id}" type="number" min="0" max="${examMax()}" step="0.5" inputmode="decimal" aria-label="درجة ${esc(st.name)}" value="${e ? e.score : ""}">
+    </div>`; }).join("") || `<p class="empty">لا يوجد طلاب</p>`}
+    ${dlgActions()}`, (fd, form) => {
+    for (const inp of $$("[name=score]", form)) {
+      const v = inp.value.trim(), sid = inp.dataset.sid;
+      const e = examFor(sid, key);
+      if (v === "") { if (e) db.exams = db.exams.filter((x) => x !== e); continue; }
+      const score = Number(v);
+      if (!(score >= 0 && score <= examMax())) { toast(`الدرجة من 0 إلى ${examMax()}`); inp.focus(); return false; }
+      if (e) Object.assign(e, { score, max: examMax(), updatedAt: Date.now() });
+      else db.exams.push({ id: uid(), studentId: sid, month: key, score, max: examMax(), createdAt: Date.now(), updatedAt: Date.now() });
+    }
+    save(); render(); toast("تم حفظ الدرجات");
+  });
 }
 function pagesInPeriod(id, from, to) {
   const set = new Set();
@@ -109,7 +182,7 @@ function joinDate(st) {
   return db.daily.filter((r) => r.studentId === st.id).reduce((m, r) => (r.date < m ? r.date : m), created);
 }
 function monthStats(st, ym) {
-  const today = todayStr(), first = ym + "-01", last = monthEnd(ym);
+  const today = todayStr(), { first, last } = monthRange(ym);
   const from = first > joinDate(st) ? first : joinDate(st);
   const days = programDays();
   const recs = db.daily.filter((r) => r.studentId === st.id && r.date >= first && r.date <= last);
@@ -132,7 +205,10 @@ function monthStats(st, ym) {
   const sard = db.sard.filter((r) => r.studentId === st.id && r.date >= first && r.date <= last);
   out.sardPages = sard.reduce((a, r) => a + sardPagesOf(r), 0);
   out.sardSittings = sard.length;
-  out.memorized = memorizedSet(st).size;
+  out.attended = out.done + out.failed;
+  out.memorized = memorizedSet(st, last).size;
+  out.reached = reachedPage(st, last);
+  out.exam = examFor(st.id, ym);
   out.khatm = khatmProjection(st);
   return out;
 }
@@ -196,7 +272,7 @@ function buildDaySummary(date, tid = "") {
 
 function buildSardMessage(r) {
   const st = getStudent(r.studentId);
-  const ym = r.date.slice(0, 7);
+  const ym = monthOf(r.date);
   const m = monthStats(st, ym);
   return ["السلام عليكم ورحمة الله وبركاته",
     `📚 سرد ${programName()} — ${fmtDate(r.date)}`, `🎓 الطالب: ${st.name}`, teacherLine(r, st),
@@ -216,7 +292,10 @@ function buildMonthlyReport(st, ym) {
   return ["السلام عليكم ورحمة الله وبركاته",
     `📊 التقرير الشهري — ${programName()}`, `🗓️ شهر ${fmtMonth(ym)}`, `🎓 الطالب: ${st.name}`, t ? `👤 المعلم: ${t.name}` : "",
     "",
-    `📅 أيام التسميع المطلوبة: ${m.required}`,
+    `📍 وصل في الحفظ إلى: ${reachedText(m.reached)}`,
+    `📝 الاختبار الشهري: ${examText(m.exam)}`,
+    "",
+    `🙋 الحضور: حضر ${m.attended} من ${m.required} يوماً${m.absent ? `، وغاب ${m.absent}` : ""}`,
     `✅ أنجز: ${m.done} · ↩️ عوّض: ${m.madeUp}`,
     `❌ أخطأ: ${m.failed} · 🚫 غاب: ${m.absent}${m.unrecorded ? ` · ⏺️ لم يُسجَّل: ${m.unrecorded}` : ""}`,
     m.owed ? `⚠️ لم يعوّض بعد: ${m.owed}` : "",
@@ -231,13 +310,16 @@ function buildMonthlyReport(st, ym) {
 function buildMonthSummary(ym, tid = "") {
   const sts = db.students.filter((s) => !tid || s.teacherId === tid).sort((a, b) => a.name.localeCompare(b.name, "ar"));
   const t = getTeacher(tid);
-  const rows = sts.map((st) => {
+  const rows = sts.map((st, i) => {
     const m = monthStats(st, ym);
-    return `• ${st.name}: إنجاز ${m.achieved}/${m.required} (${pct(m.rate)}) · حفظ ${m.pages} · سرد ${m.sardPages} · المحفوظ ${m.memorized}/${TOTAL_PAGES}` +
-      (m.owed ? ` · ⚠️ لم يعوّض ${m.owed}` : "") + (m.khatm.finished ? " · 🎉 خاتم" : ` · الختم ~ ${fmtKhatm(m.khatm.date)}`);
+    return [`${i + 1}. ${st.name}`,
+      `   📍 وصل إلى: ${reachedText(m.reached)} — المحفوظ ${wajhAr(m.memorized)}`,
+      `   📖 حفظ الشهر: ${wajhAr(m.pages)} · 📚 السرد: ${wajhAr(m.sardPages)}`,
+      `   🙋 الحضور: ${m.attended}/${m.required}${m.absent ? ` (غاب ${m.absent})` : ""} · الإنجاز ${pct(m.rate)}${m.owed ? ` · ⚠️ لم يعوّض ${m.owed}` : ""}`,
+      `   📝 الاختبار: ${examText(m.exam)}`].join("\n");
   });
-  return ["السلام عليكم ورحمة الله وبركاته", `📊 ملخص شهر ${fmtMonth(ym)} — ${programName()}${t ? ` — حلقة ${t.name}` : ""}`,
-    `عدد الطلاب: ${sts.length}`, "", ...rows].join("\n");
+  return ["السلام عليكم ورحمة الله وبركاته", `📊 التقرير الشهري — ${fmtMonth(ym)}`, `${programName()}${t ? ` — حلقة ${t.name}` : ""}`,
+    `عدد الطلاب: ${sts.length}`, "", rows.join("\n\n")].join("\n");
 }
 
 /* ---------- نافذة الإرسال لأكثر من جهة ---------- */
@@ -523,7 +605,18 @@ function programHomeSection() {
   const isDay = programDays().includes(dw), isMakeup = dw === makeupDay();
   const owed = sts.map((st) => ({ st, o: owedRecords(st.id) })).filter((x) => x.o.length);
   const pending = isDay ? sts.filter((st) => !regularOn(st.id, today)) : [];
+  const cur = currentMonth(), left = Math.round((dateObj(monthRange(cur).last) - dateObj(today)) / 864e5);
+  const prev = shiftMonth(cur, -1), sinceStart = Math.round((dateObj(today) - dateObj(monthRange(cur).first)) / 864e5);
+  const reportKey = left <= 3 ? cur : sinceStart <= 4 ? prev : "";
+  const missingExams = reportKey ? sts.filter((st) => !examFor(st.id, reportKey)).length : 0;
   return `
+    ${reportKey ? `<div class="card notice">
+      <b>🗓️ ${reportKey === cur ? `اقتربت نهاية شهر ${fmtMonth(cur)}${left ? ` (بقي ${left === 1 ? "يوم" : left === 2 ? "يومان" : `${left} أيام`})` : " — اليوم آخره"}` : `انتهى شهر ${fmtMonth(prev)}`}</b>
+      <div class="small">${missingExams ? `لم تُرصد درجة الاختبار لـ ${missingExams} من ${sts.length} طالب. ` : "رُصدت درجات الاختبار. "}التقرير الشهري جاهز للإرسال.</div>
+      <div class="row" style="margin-top:8px">
+        ${missingExams ? `<button class="btn sm" data-exam="${reportKey}" data-ids="${sts.map((x) => x.id).join(",")}">📝 رصد الدرجات</button>` : ""}
+        <a class="btn sm primary" href="#/stats/${reportKey}${tid ? "/" + tid : ""}">📊 التقرير الشهري</a>
+      </div></div>` : ""}
     <h2>${esc(programName())}</h2>
     ${teachers().length > 1 ? `<div class="tabs" style="margin-top:0">${[["", "الكل"], ...teachers().map((t) => [t.id, t.name])].map(([id, n]) =>
       `<button data-home-teacher="${id}" class="${tid === id ? "active" : ""}">${esc(n)}</button>`).join("")}</div>` : ""}
@@ -569,7 +662,7 @@ function dailyCard(r) {
 }
 
 function studentProgramTab(st) {
-  const ym = todayStr().slice(0, 7);
+  const ym = currentMonth();
   const m = monthStats(st, ym);
   const recs = studentDaily(st.id);
   const shown = recs.slice(0, studentProgramTab.more ? recs.length : 20);
@@ -578,14 +671,17 @@ function studentProgramTab(st) {
       <div class="row between"><b>التقدم نحو الختم</b><span class="badge">${wajhAr(m.memorized)} من ${TOTAL_PAGES}</span></div>
       ${progressBar(m.memorized / TOTAL_PAGES, `محفوظ ${pct(m.memorized / TOTAL_PAGES)}`)}
       <div class="small" style="margin-top:6px">${khatmText(m.khatm)}</div>
+      <div class="small">📍 وصل إلى: ${reachedText(m.reached)}</div>
       <div class="small muted">المقدار اليومي: ${wajhAr(dailyPagesOf(st))} · ${st.direction === "desc" ? "من آخر المصحف" : "من أول المصحف"}</div>
       <div class="stats" style="margin:12px 0 0">
+        <div class="stat"><b>${m.exam ? m.exam.score : "—"}</b><span>اختبار ${fmtMonth(ym).split(" ")[0]}</span></div>
         <div class="stat"><b>${pct(m.rate)}</b><span>إنجاز الشهر</span></div>
         <div class="stat"><b>${m.pages}</b><span>وجه حُفظ الشهر</span></div>
         <div class="stat"><b>${m.sardPages}</b><span>وجه سرد الشهر</span></div>
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn sm whatsapp" data-month-report="${st.id}" data-ym="${ym}">📤 التقرير الشهري</button>
+        <button class="btn sm" data-exam="${ym}" data-ids="${st.id}">📝 درجة الاختبار</button>
       </div>
     </div>
     <div class="card"><b>هذا الأسبوع</b><div style="margin-top:8px">${weekBoard([st], weekStartOf(todayStr()))}</div></div>
@@ -595,7 +691,7 @@ function studentProgramTab(st) {
 
 function studentSardTab(st) {
   const recs = studentSard(st.id);
-  const months = [...new Set(recs.map((r) => r.date.slice(0, 7)))];
+  const months = [...new Set(recs.map((r) => monthOf(r.date)))];
   const memorized = memorizedSet(st).size;
   return `
     <div class="row between" style="margin-bottom:10px">
@@ -603,7 +699,7 @@ function studentSardTab(st) {
       <button class="btn sm primary" data-sard-new="${st.id}">+ تسجيل سرد</button>
     </div>
     ${months.length ? months.map((ym) => {
-      const list = recs.filter((r) => r.date.startsWith(ym));
+      const list = recs.filter((r) => monthOf(r.date) === ym);
       const total = list.reduce((a, r) => a + sardPagesOf(r), 0);
       return `<div class="card">
         <div class="row between"><b>سرد ${fmtMonth(ym)}</b><span class="badge">المجموع: ${wajhAr(total)}</span></div>
@@ -622,7 +718,8 @@ function studentSardTab(st) {
 
 /* ---------- صفحة الإحصائيات ---------- */
 function pageStats(ymArg, tidArg) {
-  const ym = /^\d{4}-\d{2}$/.test(ymArg || "") ? ymArg : todayStr().slice(0, 7);
+  const ym = /^\d{4}-\d{2}$/.test(ymArg || "") ? ymArg : currentMonth();
+  const range = monthRange(ym);
   const tid = tidArg || "";
   const sts = db.students.filter((s) => !tid || s.teacherId === tid).sort((a, b) => a.name.localeCompare(b.name, "ar"));
   const rows = sts.map((st) => ({ st, m: monthStats(st, ym) }));
@@ -648,7 +745,7 @@ function pageStats(ymArg, tidArg) {
     <h1>الإحصائيات</h1>
     <div class="row between card monthnav">
       <a class="btn sm" href="${link(shiftMonth(ym, -1), tid)}" aria-label="الشهر السابق">→</a>
-      <b>${fmtMonth(ym)}</b>
+      <span style="text-align:center"><b>${fmtMonth(ym)}</b><br><span class="small muted">${fmtDate(range.first)} – ${fmtDate(range.last)}</span></span>
       <a class="btn sm" href="${link(shiftMonth(ym, 1), tid)}" aria-label="الشهر التالي">←</a>
     </div>
     ${teachers().length > 1 ? `<div class="tabs">${[["", "كل الحلقات"], ...teachers().map((t) => [t.id, t.name])].map(([id, n]) =>
@@ -674,12 +771,28 @@ function pageStats(ymArg, tidArg) {
       <div class="row between"><b>${esc(x.t.name)}</b><span class="badge">${x.n} طالب</span></div>
       ${progressBar(x.rate || 0, `إنجاز ${pct(x.rate)}`)}
       <div class="small muted">إنجاز ${pct(x.rate)} · حفظ ${wajhAr(x.pages)} · سرد ${wajhAr(x.sard)}</div></li>`).join("")}</ul></div>` : ""}
-    <div class="row between"><h2>الطلاب</h2>
-      <button class="btn sm whatsapp" data-month-summary="${ym}" data-tid="${tid}">📤 ملخص الشهر للمشرف</button></div>
+    <div class="row between"><h2>التقرير الشهري</h2>
+      <div class="row no-print">
+        <button class="btn sm" data-exam="${ym}" data-ids="${sts.map((x) => x.id).join(",")}">📝 رصد درجات الاختبار</button>
+        <button class="btn sm whatsapp" data-month-summary="${ym}" data-tid="${tid}">📤 إرسال التقرير</button>
+        <button class="btn sm" data-print>🖨️ طباعة / PDF</button>
+      </div></div>
+    ${rows.length ? `<div class="card tablewrap"><table class="report">
+      <thead><tr><th>الطالب</th><th>وصل إلى</th><th>حفظ · سرد</th><th>الحضور</th><th>الاختبار</th></tr></thead>
+      <tbody>${rows.map(({ st, m }) => `<tr>
+        <td><a href="#/student/${st.id}">${esc(st.name)}</a></td>
+        <td>${m.reached ? `ص ${m.reached}<br><span class="small muted">${surahName(PAGE_SURAH[m.reached - 1])}</span>` : "—"}</td>
+        <td>${m.pages} · ${m.sardPages}</td>
+        <td>${m.attended}/${m.required}${m.absent ? `<br><span class="small" style="color:var(--danger)">غاب ${m.absent}</span>` : ""}</td>
+        <td>${m.exam ? `<b>${m.exam.score}</b><br><span class="small muted">${examGrade(m.exam)}</span>` : `<span class="muted">—</span>`}</td>
+      </tr>`).join("")}</tbody></table>
+      <p class="small muted" style="margin:6px 0 0">«حفظ · سرد»: الأوجه المحفوظة هذا الشهر ثم أوجه السرد. الحضور: أيام الحضور من أيام التسميع${HIJRI ? "، والشهر هجري بتقويم أم القرى" : ""}.</p></div>` : ""}
+    <h2>تفاصيل الطلاب</h2>
     ${rows.length ? rows.map(({ st, m }) => `<div class="card">
       <div class="row between"><a href="#/student/${st.id}"><b>${esc(st.name)}</b></a>
         <span class="badge ${m.rate == null ? "" : m.rate >= 0.9 ? "ok" : m.rate >= 0.7 ? "warn" : "danger"}">إنجاز ${pct(m.rate)}</span></div>
       <div class="small muted">أنجز ${m.done} · عوّض ${m.madeUp} · أخطأ ${m.failed} · غاب ${m.absent}${m.unrecorded ? ` · لم يُسجَّل ${m.unrecorded}` : ""} — من ${m.required} يوماً${m.owed ? ` · <span class="badge danger">لم يعوّض ${m.owed}</span>` : ""}</div>
+      <div class="small">📍 وصل إلى: ${reachedText(m.reached)} · 📝 الاختبار: ${examText(m.exam)}</div>
       <div class="small">حفظ الشهر: <b>${wajhAr(m.pages)}</b> · السرد: <b>${wajhAr(m.sardPages)}</b> · الأخطاء: ${m.mistakes}</div>
       ${progressBar(m.memorized / TOTAL_PAGES, `محفوظ ${pct(m.memorized / TOTAL_PAGES)}`)}
       <div class="small muted">المحفوظ ${m.memorized}/${TOTAL_PAGES} (${pct(m.memorized / TOTAL_PAGES)}) · ${m.khatm.finished ? "🎉 خاتم" : `الختم المتوقع: ${fmtKhatm(m.khatm.date)}`}</div>
@@ -726,6 +839,8 @@ function programClick(t) {
     multiSendDialog({ title: "ملخص اليوم", text: buildDaySummary(d.daySummary, d.tid), recipients: staffRecipients(d.tid) });
     return true;
   }
+  if (d.exam) { examDialog(d.exam, d.ids ? d.ids.split(",").filter(Boolean) : []); return true; }
+  if ("print" in d) { window.print(); return true; }
   if ("homeTeacher" in d) { programHomeSection.tid = d.homeTeacher; render(); return true; }
   return false;
 }
@@ -746,6 +861,7 @@ function programSettingsHtml() {
     </div>
     <label><span>عدد الأخطاء المسموح ليُعدّ الورد منجزاً</span><select name="passMistakes">${[0, 1, 2, 3].map((n) =>
       `<option value="${n}" ${n === (Number(s.passMistakes) || 0) ? "selected" : ""}>${n === 0 ? "لا شيء — أي خطأ يوجب التعويض" : n}</option>`).join("")}</select></label>
+    <label><span>الدرجة الكاملة للاختبار الشهري</span><input name="examMax" type="number" min="1" inputmode="numeric" value="${examMax()}"></label>
     <p class="field-label">المعلمون (يُرسل لكل معلم تقرير طلابه)</p>
     ${list.map((t) => `<div class="grid2"><input type="hidden" name="tId" value="${esc(t.id || "")}">
       <input name="tName" placeholder="اسم المعلم" aria-label="اسم المعلم" value="${esc(t.name || "")}">
@@ -764,7 +880,7 @@ function readProgramSettings(fd) {
   return {
     programName: fd.get("programName").trim() || "برنامج صناعة الحافظ",
     programDays: days.length ? days : [0, 1, 2, 3], makeupDay: Number(fd.get("makeupDay")),
-    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1), passMistakes: Number(fd.get("passMistakes")) || 0,
+    dailyPages: Math.max(1, Number(fd.get("dailyPages")) || 1), examMax: Math.max(1, Number(fd.get("examMax")) || 100), passMistakes: Number(fd.get("passMistakes")) || 0,
     teachers: list, supervisorName: fd.get("supervisorName").trim(), supervisorPhone: fd.get("supervisorPhone").trim()
   };
 }
