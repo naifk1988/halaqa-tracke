@@ -40,9 +40,11 @@ function emptyDb() {
   return {
     settings: {
       halaqaName: "حلقة القرآن", teacherName: "", countryCode: "966", template: DEFAULT_TEMPLATE,
-      sessionTemplate: DEFAULT_SESSION_TEMPLATE, repeatThreshold: 2
+      sessionTemplate: DEFAULT_SESSION_TEMPLATE, repeatThreshold: 2,
+      programName: "برنامج صناعة الحافظ", programDays: [0, 1, 2, 3], makeupDay: 4, dailyPages: 1, passMistakes: 0,
+      teachers: [], supervisorName: "", supervisorPhone: ""
     },
-    students: [], sessions: [], mistakes: [], notes: []
+    students: [], sessions: [], mistakes: [], notes: [], daily: [], sard: []
   };
 }
 
@@ -216,7 +218,7 @@ function fillTemplate(template, st, vars, extra = "") {
     "{الاسم}": st.name,
     "{الحلقة}": s.halaqaName || "الحلقة",
     "{الرواية}": riwayaOf(st),
-    "{المعلم}": s.teacherName ? `معلمك: ${s.teacherName}` : "",
+    "{المعلم}": (teacherOf(st) || {}).name || s.teacherName ? `معلمك: ${(teacherOf(st) || {}).name || s.teacherName}` : "",
     ...vars
   };
   // السطر الذي ليس فيه إلا متغير فارغ يُحذف كله
@@ -284,6 +286,7 @@ function openDialog(html, onSubmit, onClick = null) {
   const form = $("#dlg-form");
   form.innerHTML = html;
   form.onclick = onClick;
+  form.onchange = form.oninput = null;
   form.onsubmit = (e) => {
     e.preventDefault();
     if (onSubmit(new FormData(form), form, e.submitter) !== false) dlg.close();
@@ -296,7 +299,7 @@ const dlgActions = (label = "حفظ") =>
   `<div class="dlg-actions"><button type="button" class="btn" data-close>إلغاء</button><button class="btn primary">${label}</button></div>`;
 
 function studentForm(st = {}) {
-  const days = st.days || [];
+  const days = st.days || (st.id ? [] : programDays());
   openDialog(`
     <h2>${st.id ? "تعديل بيانات الطالب" : "إضافة طالب"}</h2>
     <label><span>اسم الطالب</span><input name="name" required value="${esc(st.name)}"></label>
@@ -311,11 +314,13 @@ function studentForm(st = {}) {
       <label><span>الرواية التي يقرأ بها</span><select name="riwaya">${riwayaOptions(riwayaOf(st))}</select></label>
       <label><span>وقت الحلقة</span><input name="time" type="time" value="${esc(st.time || "16:00")}"></label>
     </div>
+    ${studentProgramFields(st)}
     <label><span>ملاحظات عامة (المستوى، مقدار الحفظ الحالي…)</span><textarea name="notes">${esc(st.notes)}</textarea></label>
     ${dlgActions()}`, (fd) => {
     const data = {
       name: fd.get("name").trim(), phone: fd.get("phone").trim(), guardianPhone: fd.get("guardianPhone").trim(),
-      days: fd.getAll("days").map(Number), time: fd.get("time"), riwaya: fd.get("riwaya"), notes: fd.get("notes").trim()
+      days: fd.getAll("days").map(Number), time: fd.get("time"), riwaya: fd.get("riwaya"), notes: fd.get("notes").trim(),
+      ...readStudentProgramFields(fd), updatedAt: Date.now()
     };
     if (st.id) Object.assign(st, data);
     else { const n = { id: uid(), createdAt: Date.now(), ...data }; db.students.push(n); location.hash = `#/student/${n.id}`; }
@@ -477,10 +482,28 @@ function backupDialog() {
   });
 }
 
-function restoreData(text) {
+// دمج نسخة من جهاز آخر (معلم آخر مثلاً): تُضاف السجلات الجديدة، ويُؤخذ الأحدث عند التعارض
+const stamp = (x) => x.updatedAt || x.createdAt || 0;
+function mergeData(data) {
+  for (const k of ["students", "sessions", "mistakes", "notes", "daily", "sard"]) {
+    const map = new Map((db[k] || []).map((x) => [x.id, x]));
+    for (const x of data[k] || []) if (!map.has(x.id) || stamp(x) > stamp(map.get(x.id))) map.set(x.id, x);
+    db[k] = [...map.values()];
+  }
+  const ts = new Map(teachers().map((t) => [t.id, t]));
+  for (const t of (data.settings && data.settings.teachers) || []) if (!ts.has(t.id)) ts.set(t.id, t);
+  db.settings.teachers = [...ts.values()];
+}
+
+function restoreData(text, merge = false) {
   let data;
   try { data = JSON.parse(text); if (!Array.isArray(data.students)) throw 0; }
   catch { toast("النص أو الملف ليس نسخة احتياطية صالحة"); return; }
+  if (merge) {
+    return confirmDialog(`دمج النسخة (${data.students.length} طالب) مع البيانات الحالية؟`, () => {
+      mergeData(data); save(); render(); toast("تم الدمج");
+    }, "دمج");
+  }
   confirmDialog(`استبدال البيانات الحالية بالنسخة المستعادة (${data.students.length} طالب)؟`, () => {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch {}
     const base = emptyDb();
@@ -494,17 +517,19 @@ function restoreDialog() {
     <h2>استعادة نسخة احتياطية</h2>
     <label><span>اختر ملف النسخة</span><input type="file" id="restore-file" accept="application/json,.json"></label>
     <label><span>أو الصق نص النسخة هنا</span><textarea name="paste" dir="ltr" style="font-family:monospace;font-size:.75rem"></textarea></label>
+    <label class="row" style="margin:0 0 10px"><input type="checkbox" name="merge" id="restore-merge" checked style="width:auto;min-height:0"> دمج مع البيانات الحالية (لجمع سجلات المعلمين من أجهزتهم) بدل استبدالها</label>
     <div class="dlg-actions"><button type="button" class="btn" data-close>إلغاء</button><button class="btn primary">استعادة</button></div>`,
   (fd) => {
     const text = fd.get("paste").trim();
     if (!text) { toast("الصق النص أو اختر ملفاً"); return false; }
-    setTimeout(() => restoreData(text));
+    setTimeout(() => restoreData(text, fd.get("merge") === "on"));
   });
   $("#restore-file", form).addEventListener("change", (e) => {
     const f = e.target.files[0];
     if (!f) return;
     const reader = new FileReader();
-    reader.onload = () => { dlg.close(); restoreData(reader.result); };
+    const merge = $("#restore-merge", form).checked;
+    reader.onload = () => { dlg.close(); restoreData(reader.result, merge); };
     reader.readAsText(f);
   });
 }
@@ -596,16 +621,15 @@ function pageHome() {
     <p class="muted">${now.toLocaleDateString("ar", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
     <div class="stats">
       <div class="stat"><b>${db.students.length}</b><span>طالب</span></div>
-      <div class="stat"><b>${db.sessions.filter((s) => s.date >= weekAgo).length}</b><span>تسميع هذا الأسبوع</span></div>
+      <div class="stat"><b>${db.sessions.filter((s) => s.date >= weekAgo && !s.draft).length + db.daily.filter((x) => x.date >= weekAgo).length}</b><span>تسميع هذا الأسبوع</span></div>
       <div class="stat"><b>${openRepeated.reduce((a, x) => a + x.g.length, 0)}</b><span>خطأ متكرر لم يُتقن</span></div>
     </div>
     ${db.students.length === 0 ? `<div class="card empty">ابدأ بإضافة طلاب حلقتك<br><br><button class="btn primary" data-action="add-student">+ إضافة طالب</button></div>` : ""}
+    ${programHomeSection()}
     ${unsent.length ? `<h2>تقارير تسميع اليوم لم تُرسل (${unsent.length})</h2>
       <div class="card"><ul class="list">${unsent.map((x) => `<li class="row between">
         <span class="grow"><b>${esc(getStudent(x.studentId).name)}</b><br><span class="muted small">${rangeText(x)} · ${sessionMistakes(x).length} خطأ</span></span>
         <button class="btn sm whatsapp" data-send-session="${x.id}">📤 إرسال</button></li>`).join("")}</ul></div>` : ""}
-    ${today.length ? `<h2>حلقة اليوم (${DAYS[todayDow]})</h2>
-      <div class="card"><ul class="list">${today.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`, true)).join("")}</ul></div>` : ""}
     ${tomorrow.length ? `<h2>حلقة الغد (${DAYS[tomorrowDow]}) — ذكّرهم الليلة</h2>
       <div class="card"><ul class="list">${tomorrow.map((s) => studentRow(s, `الساعة ${fmtTime(s.time)}`)).join("")}</ul></div>` : ""}
     ${openRepeated.length ? `<h2>طلاب لديهم أخطاء متكررة</h2>
@@ -631,7 +655,7 @@ function pageStudents() {
 function pageStudent(id, tab) {
   const st = getStudent(id);
   if (!st) return `<p class="empty">الطالب غير موجود</p>`;
-  tab = tab || "log";
+  tab = tab || "program";
   const sessions = finishedSessions(id);
   const draft = draftSession(id);
   const groups = groupMistakes(studentMistakes(id));
@@ -639,7 +663,9 @@ function pageStudent(id, tab) {
   const appt = nextAppointment(st);
 
   let body = "";
-  if (tab === "log") {
+  if (tab === "program") body = studentProgramTab(st);
+  else if (tab === "sard") body = studentSardTab(st);
+  else if (tab === "log") {
     body = (draft ? `<div class="card draft-card">
         <div class="row between"><b>⏳ تسميع لم يُنهَ بعد</b><span class="badge danger">${sessionMistakes(draft).length} خطأ</span></div>
         <div class="muted small">${fmtDate(draft.date)} · بدأ من ${surahName(draft.surah)} ${draft.fromAyah}</div>
@@ -701,6 +727,8 @@ function pageStudent(id, tab) {
       <p><b>الجوال:</b> ${esc(st.phone) || "—"}</p>
       <p><b>ولي الأمر:</b> ${esc(st.guardianPhone) || "—"}</p>
       <p><b>الرواية:</b> ${esc(riwayaOf(st))}</p>
+      <p><b>المعلم:</b> ${esc((teacherOf(st) || {}).name || "—")}</p>
+      <p><b>المقدار اليومي:</b> ${wajhAr(dailyPagesOf(st))} · <b>المحفوظ قبل البرنامج:</b> ${wajhAr(Number(st.memorizedBefore) || 0)}</p>
       <p><b>أيام الحلقة:</b> ${(st.days || []).map((d) => DAYS[d]).join("، ") || "—"} ${st.time ? "— " + fmtTime(st.time) : ""}</p>
       <p><b>آخر تذكير:</b> ${st.lastReminder ? new Date(st.lastReminder).toLocaleString("ar") : "—"}</p>
       ${st.notes ? `<p><b>ملاحظات:</b> ${esc(st.notes)}</p>` : ""}
@@ -717,17 +745,19 @@ function pageStudent(id, tab) {
           <div class="muted small">الموعد القادم: ${fmtAppointment(appt)}</div></div>
       </div>
       <div class="stats" style="margin:12px 0 0">
-        <div class="stat"><b>${sessions.length}</b><span>تسميع</span></div>
-        <div class="stat"><b>${hifzAyahCount(id)}</b><span>آية حُفظت</span></div>
+        <div class="stat"><b>${memorizedSet(st).size}</b><span>وجه محفوظ</span></div>
+        <div class="stat"><b>${owedRecords(id).length}</b><span>تعويض مستحق</span></div>
         <div class="stat"><b>${repeated.length}</b><span>خطأ متكرر</span></div>
       </div>
       <div class="row" style="margin-top:12px">
-        <a class="btn primary grow" href="${reciteHash(id)}">📖 ${draft ? "متابعة التسميع" : "تسميع جديد"}</a>
-        <button class="btn grow" data-remind="${st.id}">🔔 تذكير</button>
+        <button class="btn primary grow" data-daily-new="${st.id}">📝 تسجيل</button>
+        <button class="btn grow" data-sard-new="${st.id}">📚 سرد</button>
+        <a class="btn grow" href="${reciteHash(id)}">📖 ${draft ? "متابعة التسميع" : "المصحف"}</a>
+        <button class="btn" data-remind="${st.id}" aria-label="تذكير">🔔</button>
       </div>
     </div>
     <div class="tabs">
-      ${[["log", "دفتر المتابعة"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`],
+      ${[["program", "البرنامج"], ["sard", `السرد (${studentSard(id).length})`], ["log", "تسميع المصحف"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`],
         ["notes", `الملاحظات (${db.notes.filter((n) => n.studentId === id).length})`], ["info", "البيانات"]]
         .map(([k, v]) => `<button data-tab="${k}" class="${tab === k ? "active" : ""}">${v}</button>`).join("")}
     </div>
@@ -792,6 +822,7 @@ function pageSettings() {
   return `
     <h1>الإعدادات</h1>
     <form id="settings-form" class="card">
+      ${programSettingsHtml()}
       <label><span>اسم الحلقة</span><input name="halaqaName" value="${esc(s.halaqaName)}"></label>
       <label><span>اسم المعلم</span><input name="teacherName" value="${esc(s.teacherName)}"></label>
       <div class="grid2">
@@ -1487,9 +1518,11 @@ function render() {
   const r = parseRoute();
   $("#brand-name").textContent = db.settings.halaqaName || "دفتر الحلقة";
   const pages = { home: pageHome, students: pageStudents, mistakes: pageMistakes, reminders: pageReminders, settings: pageSettings };
+  if (r.page !== "student") studentProgramTab.more = false;
   if (r.page !== "mushaf") { mushafView = null; document.body.classList.remove("mushaf-mode", "chrome-hidden"); }
   view.innerHTML = r.page === "student" ? pageStudent(r.id, r.tab)
     : r.page === "mushaf" ? pageMushaf(r.id, r.tab, r.extra)
+    : r.page === "stats" ? pageStats(r.id, r.tab)
     : (pages[r.page] || pageHome)();
   if (r.page === "mushaf") afterMushafRender();
   const navKey = r.page === "student" ? "students" : r.page;
@@ -1514,6 +1547,7 @@ view.addEventListener("click", (e) => {
   const st = r.page === "student" ? getStudent(r.id) : null;
   const d = t.dataset;
 
+  if (programClick(t)) return;
   if (d.remind) return reminderDialog(getStudent(d.remind));
   if (d.sendSession) return sessionSendDialog(d.sendSession);
   if (d.sendNote) return noteSendDialog(d.sendNote);
@@ -1563,6 +1597,8 @@ view.addEventListener("click", (e) => {
         db.sessions = db.sessions.filter((s) => s.studentId !== st.id);
         db.mistakes = db.mistakes.filter((m) => m.studentId !== st.id);
         db.notes = db.notes.filter((n) => n.studentId !== st.id);
+        db.daily = db.daily.filter((x) => x.studentId !== st.id);
+        db.sard = db.sard.filter((x) => x.studentId !== st.id);
         save(); location.hash = "#/students";
       });
     case "mushaf-index": return mushafIndexSheet();
@@ -1605,7 +1641,7 @@ view.addEventListener("submit", (e) => {
   Object.assign(db.settings, {
     halaqaName: fd.get("halaqaName").trim(), teacherName: fd.get("teacherName").trim(),
     countryCode: fd.get("countryCode").replace(/\D/g, ""), template: fd.get("template"), sessionTemplate: fd.get("sessionTemplate"),
-    repeatThreshold: Number(fd.get("repeatThreshold"))
+    repeatThreshold: Number(fd.get("repeatThreshold")), ...readProgramSettings(fd)
   });
   save(); render(); toast("تم حفظ الإعدادات");
 });
