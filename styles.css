@@ -491,3 +491,8 @@ body.mushaf-mode #view { padding: 0; }
   body { padding: 0; background: #fff; }
   .card { break-inside: avoid; border-color: #ccc; }
 }
+#sync-state { margin-inline-start: auto; font-size: 1rem; }
+body.login-mode .tabbar, body.student-mode .tabbar { display: none; }
+body.student-mode, body.login-mode { padding-bottom: 24px; }
+.login { max-width: 420px; margin: 40px auto; text-align: center; }
+.stats.two { grid-template-columns: repeat(2, 1fr); }

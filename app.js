@@ -64,6 +64,7 @@ function load() {
 function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); }
   catch (e) { toast("تعذّر الحفظ في المتصفح"); }
+  syncSoon();
 }
 
 /* ============ أدوات مساعدة ============ */
@@ -656,6 +657,7 @@ function pageStudent(id, tab) {
   const st = getStudent(id);
   if (!st) return `<p class="empty">الطالب غير موجود</p>`;
   tab = tab || "program";
+  if (isStudent() && !["program", "sard"].includes(tab)) tab = "program";
   const sessions = finishedSessions(id);
   const draft = draftSession(id);
   const groups = groupMistakes(studentMistakes(id));
@@ -749,16 +751,20 @@ function pageStudent(id, tab) {
         <div class="stat"><b>${owedRecords(id).length}</b><span>تعويض مستحق</span></div>
         <div class="stat"><b>${repeated.length}</b><span>خطأ متكرر</span></div>
       </div>
-      <div class="row" style="margin-top:12px">
+      ${isStudent() ? `<div class="row" style="margin-top:12px">
+        <button class="btn primary grow" data-daily-new="${st.id}">📝 سجّل تسميعك</button>
+        <button class="btn grow" data-sard-new="${st.id}">📚 سرد</button>
+        <button class="btn" data-action="logout">خروج</button>
+      </div>` : `<div class="row" style="margin-top:12px">
         <button class="btn primary grow" data-daily-new="${st.id}">📝 تسجيل</button>
         <button class="btn grow" data-sard-new="${st.id}">📚 سرد</button>
         <a class="btn grow" href="${reciteHash(id)}">📖 ${draft ? "متابعة التسميع" : "المصحف"}</a>
         <button class="btn" data-remind="${st.id}" aria-label="تذكير">🔔</button>
-      </div>
+      </div>`}
     </div>
     <div class="tabs">
-      ${[["program", "البرنامج"], ["sard", `السرد (${studentSard(id).length})`], ["log", "تسميع المصحف"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`],
-        ["notes", `الملاحظات (${db.notes.filter((n) => n.studentId === id).length})`], ["info", "البيانات"]]
+      ${[["program", "البرنامج"], ["sard", `السرد (${studentSard(id).length})`], ...(isStudent() ? [] : [["log", "تسميع المصحف"], ["mistakes", `الأخطاء (${groups.filter((g) => !g.resolved).length})`],
+        ["notes", `الملاحظات (${db.notes.filter((n) => n.studentId === id).length})`], ["info", "البيانات"]])]
         .map(([k, v]) => `<button data-tab="${k}" class="${tab === k ? "active" : ""}">${v}</button>`).join("")}
     </div>
     ${body}`;
@@ -837,6 +843,7 @@ function pageSettings() {
       <button type="button" class="btn sm" data-action="reset-session-template">استعادة القالب الافتراضي</button>
       <div class="row" style="margin-top:14px"><button class="btn primary">حفظ الإعدادات</button></div>
     </form>
+    ${syncSettingsHtml()}
     <h2>النسخ الاحتياطي</h2>
     <div class="card">
       <p class="small muted">البيانات محفوظة في هذا الجهاز فقط. صدّر نسخة احتياطية بانتظام، ويمكنك استيرادها في جهاز آخر.</p>
@@ -1515,8 +1522,15 @@ function parseRoute() {
 }
 
 function render() {
+  document.body.classList.toggle("login-mode", loginRequired());
+  document.body.classList.toggle("student-mode", isStudent());
+  if (loginRequired()) { view.innerHTML = pageLogin(); return; }
+  // الطالب يرى صفحته وحدها
+  if (isStudent() && !location.hash.startsWith(`#/student/${auth.studentId}`)) {
+    history.replaceState(null, "", `#/student/${auth.studentId}`);
+  }
   const r = parseRoute();
-  $("#brand-name").textContent = db.settings.halaqaName || "دفتر الحلقة";
+  $("#brand-name").textContent = isStudent() ? programName() : db.settings.halaqaName || "دفتر الحلقة";
   const pages = { home: pageHome, students: pageStudents, mistakes: pageMistakes, reminders: pageReminders, settings: pageSettings };
   if (r.page !== "student") studentProgramTab.more = false;
   if (r.page !== "mushaf") { mushafView = null; document.body.classList.remove("mushaf-mode", "chrome-hidden"); }
@@ -1547,7 +1561,7 @@ view.addEventListener("click", (e) => {
   const st = r.page === "student" ? getStudent(r.id) : null;
   const d = t.dataset;
 
-  if (programClick(t)) return;
+  if (programClick(t) || syncClick(t)) return;
   if (d.remind) return reminderDialog(getStudent(d.remind));
   if (d.sendSession) return sessionSendDialog(d.sendSession);
   if (d.sendNote) return noteSendDialog(d.sendNote);
@@ -1636,6 +1650,10 @@ view.addEventListener("input", (e) => {
 });
 
 view.addEventListener("submit", (e) => {
+  if (e.target.id === "login-form") {
+    e.preventDefault();
+    return login(new FormData(e.target).get("code"));
+  }
   if (e.target.id !== "settings-form") return;
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -1658,6 +1676,7 @@ view.addEventListener("change", (e) => {
 
 window.addEventListener("hashchange", () => { window.scrollTo(0, 0); render(); });
 render();
+syncInit();
 
 try {
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});

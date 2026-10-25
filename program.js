@@ -84,6 +84,17 @@ function pageRangeText(r) {
 // الورد الذي لم يُنجز (خطأ أو غياب) ولم يُعوَّض بعد
 const isOwed = (r) => r.kind !== "makeup" && (r.status === "failed" || r.status === "absent") && !r.madeUpBy;
 const owedRecords = (id) => studentDaily(id).filter(isOwed).reverse();
+// الطالب يعدّل ما سجّله بنفسه ما لم يعتمده الشيخ
+const canEditRec = (r) => !isStudent() || (r.bySelf && !r.approved);
+function selfBadge(r) {
+  if (!r.bySelf) return "";
+  return r.approved ? `<span class="badge ok">سجّله الطالب · اعتمده الشيخ ✓</span>` : `<span class="badge warn">سجّله الطالب · بانتظار الاعتماد</span>`;
+}
+// ما سجّله الطالب بنفسه يعتمده الشيخ، وتعديل الشيخ له اعتماد
+function markAuthor(r) {
+  if (isStudent()) Object.assign(r, { bySelf: true, approved: false });
+  else if (r.bySelf) r.approved = true;
+}
 const regularOn = (id, date) => studentDaily(id).find((r) => r.date === date && r.kind !== "makeup");
 
 function forEachPage(r, fn) {
@@ -327,7 +338,7 @@ function recipientsFor(st) {
   const t = teacherOf(st);
   const s = db.settings;
   return [
-    st && st.phone && { label: "الطالب", phone: st.phone },
+    st && st.phone && !isStudent() && { label: "الطالب", phone: st.phone },
     st && st.guardianPhone && { label: "ولي الأمر", phone: st.guardianPhone },
     t && t.phone && { label: `المعلم (${t.name})`, phone: t.phone },
     s.supervisorPhone && { label: `المشرف${s.supervisorName ? ` (${s.supervisorName})` : ""}`, phone: s.supervisorPhone }
@@ -418,7 +429,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
     <h2>${rec ? "تعديل التسميع" : "تسجيل التسميع"} — ${esc(st.name)}</h2>
     <div class="grid2">
       <label><span>التاريخ</span><input name="date" type="date" required value="${esc(date)}"></label>
-      <label><span>المعلم</span><select name="teacherId">${teacherOptions(r.teacherId)}</select></label>
+      <label ${isStudent() ? "hidden" : ""}><span>المعلم</span><select name="teacherId">${teacherOptions(r.teacherId)}</select></label>
     </div>
     <p class="field-label">نوع اليوم</p>
     ${chips("kind", [["regular", "ورد يومي"], ["makeup", `↩️ تعويض`]], kind)}
@@ -429,7 +440,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
         : `<p class="small muted">لا يوجد يوم مستحق للتعويض.</p>`}
     </div>
     <p class="field-label">النتيجة</p>
-    ${chips("status", Object.entries(DAILY_STATUS).map(([k, v]) => [k, `${STATUS_ICON[k]} ${v}`]), r.status)}
+    ${chips("status", Object.entries(DAILY_STATUS).filter(([k]) => !isStudent() || k !== "absent").map(([k, v]) => [k, `${STATUS_ICON[k]} ${v}`]), r.status)}
     <div class="grid2 pages-box" style="margin-top:12px">
       <label><span>من صفحة</span><input name="fromPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.fromPage || ""}"></label>
       <label><span>إلى صفحة</span><input name="toPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.toPage || ""}"></label>
@@ -466,6 +477,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
     let target = rec;
     if (target) Object.assign(target, data);
     else { target = { id: uid(), studentId, createdAt: Date.now(), ...data }; db.daily.push(target); }
+    markAuthor(target);
     // ربط التعويض بالأيام التي يعوّضها
     const chosen = k === "makeup" ? fd.getAll("makeupFor") : [];
     target.makeupFor = chosen;
@@ -477,7 +489,7 @@ function dailyForm(studentId, rec = null, preset = {}) {
     toast("تم الحفظ");
     render();
     // عند الخطأ أو الغياب تُجهَّز رسالة التعويض للطالب والمعلم والمشرف مباشرة
-    const notify = (submitter && "sendAfter" in submitter.dataset) || (!rec && status !== "done");
+    const notify = (submitter && "sendAfter" in submitter.dataset) || (!rec && (status !== "done" || isStudent()));
     if (notify) setTimeout(() => dailySendDialog(target.id));
   }, (e) => {
     if (e.target.closest("[data-add-m]")) {
@@ -529,7 +541,7 @@ function sardForm(studentId, rec = null) {
     <p class="small muted">السرد الشهري: يقرأ الطالب محفوظه في مجلس أو أكثر. سجّل كل مجلس، ويُجمع عدد الأوجه للشهر تلقائياً.</p>
     <div class="grid2">
       <label><span>التاريخ</span><input name="date" type="date" required value="${esc(r.date)}"></label>
-      <label><span>المعلم</span><select name="teacherId">${teacherOptions(r.teacherId)}</select></label>
+      <label ${isStudent() ? "hidden" : ""}><span>المعلم</span><select name="teacherId">${teacherOptions(r.teacherId)}</select></label>
       <label><span>من صفحة</span><input name="fromPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.fromPage || ""}"></label>
       <label><span>إلى صفحة</span><input name="toPage" type="number" min="1" max="${TOTAL_PAGES}" inputmode="numeric" value="${r.toPage || ""}"></label>
       <label><span>عدد الأوجه</span><input name="pages" type="number" min="0" inputmode="numeric" value="${r.pages || pagesOf(r) || ""}"></label>
@@ -550,6 +562,7 @@ function sardForm(studentId, rec = null) {
     let target = rec;
     if (target) Object.assign(target, data);
     else { target = { id: uid(), studentId, createdAt: Date.now(), ...data }; db.sard.push(target); }
+    markAuthor(target);
     save(); toast("تم حفظ السرد"); render();
     if (submitter && "sendAfter" in submitter.dataset) setTimeout(() => sardSendDialog(target.id));
   });
@@ -597,6 +610,22 @@ function weekBoard(students, ws) {
 
 const progressBar = (x, label) => `<div class="bar" role="img" aria-label="${label}"><i style="width:${Math.max(0, Math.min(100, x * 100)).toFixed(1)}%"></i></div>`;
 
+const pendingApprovals = () => [
+  ...db.daily.filter((r) => r.bySelf && !r.approved).map((r) => ({ c: "daily", r })),
+  ...db.sard.filter((r) => r.bySelf && !r.approved).map((r) => ({ c: "sard", r }))
+].filter((x) => getStudent(x.r.studentId)).sort((a, b) => b.r.date.localeCompare(a.r.date));
+function approvalsHtml(tid) {
+  const list = pendingApprovals().filter((x) => !tid || getStudent(x.r.studentId).teacherId === tid);
+  if (!list.length) return "";
+  return `<h2>سجّلها الطلاب — بانتظار اعتمادك (${list.length})</h2>
+    <div class="card"><ul class="list">${list.slice(0, 15).map(({ c, r }) => `<li class="row between">
+      <span class="grow"><b>${esc(getStudent(r.studentId).name)}</b><br><span class="small muted">${c === "sard" ? `📚 سرد ${wajhAr(sardPagesOf(r))}` :
+        `${STATUS_ICON[r.status]} ${r.kind === "makeup" ? "تعويض" : DAILY_STATUS[r.status]}${pagesOf(r) ? ` · ${pageRangeText(r)}` : ""}${(r.mistakes || []).length ? ` · ${r.mistakes.length} خطأ` : ""}`} · ${fmtDate(r.date)}</span></span>
+      ${c === "daily" ? `<button class="btn sm" data-daily-edit="${r.id}">مراجعة</button>` : `<button class="btn sm" data-sard-edit="${r.id}">مراجعة</button>`}
+      <button class="btn sm primary" data-approve="${c}|${r.id}">✓ اعتماد</button></li>`).join("")}</ul>
+      ${list.length > 1 ? `<button class="btn sm block" style="margin-top:8px" data-approve="all">✓ اعتماد الكل</button>` : ""}</div>`;
+}
+
 function programHomeSection() {
   if (!db.students.length) return "";
   const today = todayStr(), dw = dowOf(today);
@@ -617,6 +646,7 @@ function programHomeSection() {
         ${missingExams ? `<button class="btn sm" data-exam="${reportKey}" data-ids="${sts.map((x) => x.id).join(",")}">📝 رصد الدرجات</button>` : ""}
         <a class="btn sm primary" href="#/stats/${reportKey}${tid ? "/" + tid : ""}">📊 التقرير الشهري</a>
       </div></div>` : ""}
+    ${approvalsHtml(tid)}
     <h2>${esc(programName())}</h2>
     ${teachers().length > 1 ? `<div class="tabs" style="margin-top:0">${[["", "الكل"], ...teachers().map((t) => [t.id, t.name])].map(([id, n]) =>
       `<button data-home-teacher="${id}" class="${tid === id ? "active" : ""}">${esc(n)}</button>`).join("")}</div>` : ""}
@@ -650,13 +680,15 @@ function dailyCard(r) {
       <span class="badge ${cls}">${STATUS_ICON[r.status]} ${DAILY_STATUS[r.status]}${r.madeUpBy ? " · عوّض" : isOwed(r) ? " · يلزمه التعويض" : ""}</span>
     </div>
     <div class="muted small">${fmtDate(r.date)}${n ? ` · ${wajhAr(n)}` : ""}${getTeacher(r.teacherId) ? ` · ${esc(getTeacher(r.teacherId).name)}` : ""}${r.sentAt ? ` · <span class="badge ok">أُرسل ✓</span>` : ""}</div>
+    ${r.bySelf ? `<div style="margin-top:4px">${selfBadge(r)}</div>` : ""}
     ${ms.length ? `<div class="small" style="margin-top:6px">📌 ${ms.map((m) => `<span class="badge warn">${surahName(m.surah)} ${m.ayah}${m.note ? `: ${esc(m.note)}` : ""}</span>`).join(" ")}</div>` : ""}
     ${r.notes ? `<div class="small" style="margin-top:4px">📝 ${esc(r.notes)}</div>` : ""}
     <div class="row" style="margin-top:8px">
       <button class="btn sm whatsapp" data-daily-send="${r.id}">📤 ${r.sentAt ? "إعادة إرسال" : "إرسال"}</button>
       ${isOwed(r) ? `<button class="btn sm primary" data-daily-new="${r.studentId}" data-date="${todayStr()}" data-kind="makeup">↩️ تعويض</button>` : ""}
-      <button class="btn sm" data-daily-edit="${r.id}">تعديل</button>
-      <button class="btn sm danger" data-daily-del="${r.id}">حذف</button>
+      ${r.bySelf && !r.approved && !isStudent() ? `<button class="btn sm primary" data-approve="daily|${r.id}">✓ اعتماد</button>` : ""}
+      ${canEditRec(r) ? `<button class="btn sm" data-daily-edit="${r.id}">تعديل</button>
+      <button class="btn sm danger" data-daily-del="${r.id}">حذف</button>` : ""}
     </div>
   </div>`;
 }
@@ -673,15 +705,15 @@ function studentProgramTab(st) {
       <div class="small" style="margin-top:6px">${khatmText(m.khatm)}</div>
       <div class="small">📍 وصل إلى: ${reachedText(m.reached)}</div>
       <div class="small muted">المقدار اليومي: ${wajhAr(dailyPagesOf(st))} · ${st.direction === "desc" ? "من آخر المصحف" : "من أول المصحف"}</div>
-      <div class="stats" style="margin:12px 0 0">
-        <div class="stat"><b>${m.exam ? m.exam.score : "—"}</b><span>اختبار ${fmtMonth(ym).split(" ")[0]}</span></div>
+      <div class="stats two" style="margin:12px 0 0">
+        <div class="stat"><b>${m.exam ? m.exam.score : "—"}</b><span>اختبار ${fmtMonth(ym).replace(/\s*[\d٠-٩]+.*$/, "")}</span></div>
         <div class="stat"><b>${pct(m.rate)}</b><span>إنجاز الشهر</span></div>
         <div class="stat"><b>${m.pages}</b><span>وجه حُفظ الشهر</span></div>
         <div class="stat"><b>${m.sardPages}</b><span>وجه سرد الشهر</span></div>
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn sm whatsapp" data-month-report="${st.id}" data-ym="${ym}">📤 التقرير الشهري</button>
-        <button class="btn sm" data-exam="${ym}" data-ids="${st.id}">📝 درجة الاختبار</button>
+        ${isStudent() ? "" : `<button class="btn sm" data-exam="${ym}" data-ids="${st.id}">📝 درجة الاختبار</button>`}
       </div>
     </div>
     <div class="card"><b>هذا الأسبوع</b><div style="margin-top:8px">${weekBoard([st], weekStartOf(todayStr()))}</div></div>
@@ -707,10 +739,12 @@ function studentSardTab(st) {
         <ul class="list">${list.map((r) => `<li>
           <div class="row between"><span>${fmtDate(r.date)}${pagesOf(r) ? ` · ${pageRangeText(r)}` : ""}</span><b>${wajhAr(sardPagesOf(r))}</b></div>
           <div class="small muted">${r.mistakes ? `${r.mistakes} خطأ` : "بلا أخطاء"}${r.notes ? ` · ${esc(r.notes)}` : ""}${r.sentAt ? " · أُرسل ✓" : ""}</div>
+          ${selfBadge(r)}
           <div class="row" style="margin-top:6px">
             <button class="btn sm whatsapp" data-sard-send="${r.id}">📤 إرسال</button>
-            <button class="btn sm" data-sard-edit="${r.id}">تعديل</button>
-            <button class="btn sm danger" data-sard-del="${r.id}">حذف</button>
+            ${r.bySelf && !r.approved && !isStudent() ? `<button class="btn sm primary" data-approve="sard|${r.id}">✓ اعتماد</button>` : ""}
+            ${canEditRec(r) ? `<button class="btn sm" data-sard-edit="${r.id}">تعديل</button>
+            <button class="btn sm danger" data-sard-del="${r.id}">حذف</button>` : ""}
           </div></li>`).join("")}</ul>
       </div>`;
     }).join("") : `<div class="card empty">لم يُسجَّل سرد بعد. في كل شهر يسرد الطالب محفوظه، فسجّل من أين قرأ وإلى أين، ويُجمع عدد الأوجه تلقائياً.</div>`}`;
@@ -808,7 +842,22 @@ function pageStats(ymArg, tidArg) {
 function programClick(t) {
   const d = t.dataset;
   if (d.dailyNew) { dailyForm(d.dailyNew, null, { date: d.date, kind: d.kind }); return true; }
-  if (d.dailyEdit) { const r = db.daily.find((x) => x.id === d.dailyEdit); if (r) dailyForm(r.studentId, r); return true; }
+  if (d.dailyEdit) {
+    const r = db.daily.find((x) => x.id === d.dailyEdit);
+    if (r && !canEditRec(r)) toast(r.bySelf ? "اعتمده الشيخ، فلا يمكن تعديله" : "سجّله الشيخ، فلا يمكن تعديله");
+    else if (r) dailyForm(r.studentId, r);
+    return true;
+  }
+  if (d.approve) {
+    const ids = d.approve === "all" ? pendingApprovals().map((x) => `${x.c}|${x.r.id}`) : [d.approve];
+    for (const k of ids) {
+      const [c, id] = k.split("|");
+      const r = db[c].find((x) => x.id === id);
+      if (r) r.approved = true;
+    }
+    save(); render(); toast(ids.length > 1 ? `اعتُمد ${ids.length} سجلاً` : "تم الاعتماد");
+    return true;
+  }
   if (d.dailySend) { dailySendDialog(d.dailySend); return true; }
   if (d.dailyDel) {
     confirmDialog("حذف هذا التسميع؟", () => {
@@ -865,7 +914,10 @@ function programSettingsHtml() {
     <p class="field-label">المعلمون (يُرسل لكل معلم تقرير طلابه)</p>
     ${list.map((t) => `<div class="grid2"><input type="hidden" name="tId" value="${esc(t.id || "")}">
       <input name="tName" placeholder="اسم المعلم" aria-label="اسم المعلم" value="${esc(t.name || "")}">
-      <input name="tPhone" type="tel" inputmode="tel" placeholder="جوال المعلم" aria-label="جوال المعلم" value="${esc(t.phone || "")}"></div>`).join("")}
+      <input name="tPhone" type="tel" inputmode="tel" placeholder="جوال المعلم" aria-label="جوال المعلم" value="${esc(t.phone || "")}">
+      ${isAdmin() ? `<div class="row" style="grid-column:1/-1;margin-bottom:8px"><input name="tCode" placeholder="رمز دخول المعلم" aria-label="رمز دخول المعلم" value="${esc(t.code || "")}" class="grow" style="width:auto">
+        ${t.code ? `<button type="button" class="btn sm whatsapp" data-send-teacher-code="${t.id}">📤</button>` : ""}</div>` : ""}</div>`).join("")}
+    ${isAdmin() ? `<p class="small muted">رمز دخول المعلم: يكتبه المشرف (6 أحرف أو أرقام على الأقل) ثم يحفظ ويرسله للمعلم.</p>` : ""}
     <p class="small muted">لإضافة معلم آخر احفظ ثم ستظهر خانة جديدة. ولحذف معلم امسح اسمه.</p>
     <div class="grid2">
       <label><span>اسم المشرف</span><input name="supervisorName" value="${esc(s.supervisorName || "")}"></label>
@@ -875,7 +927,12 @@ function programSettingsHtml() {
 }
 function readProgramSettings(fd) {
   const ids = fd.getAll("tId"), names = fd.getAll("tName"), phones = fd.getAll("tPhone");
-  const list = names.map((n, i) => ({ id: ids[i] || uid(), name: n.trim(), phone: phones[i].trim() })).filter((t) => t.name);
+  const codes = fd.getAll("tCode");
+  const list = names.map((n, i) => {
+    const id = ids[i] || uid();
+    const code = codes.length ? codes[i].trim() : (getTeacher(id) || {}).code || "";
+    return { id, name: n.trim(), phone: phones[i].trim(), code: code.length >= 6 ? code : "" };
+  }).filter((t) => t.name);
   const days = fd.getAll("programDays").map(Number);
   return {
     programName: fd.get("programName").trim() || "برنامج صناعة الحافظ",
